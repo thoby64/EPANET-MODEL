@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>DUWASA DMA Leakage Explorer</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+:root{
+  --bg:#0b1215;--panel:#111a1f;--panel2:#162028;--border:#1e2e36;--border2:#253540;
+  --text:#d4e3e8;--dim:#7591a0;--faint:#3d5560;
+  --cyan:#3fc7d6;--cyan2:#1d5f68;--amber:#e09c35;--amber2:#5a3f18;
+  --red:#e05248;--red2:#5a201c;--green:#4dbf82;--green2:#1a4a32;
+  --purple:#8b7ff5;--blue:#5aaddf;
+  --mono:'JetBrains Mono',monospace;--sans:'Inter',system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13px}
+#app{display:flex;height:100vh;overflow:hidden}
+#sidebar{width:400px;min-width:400px;display:flex;flex-direction:column;background:var(--panel);border-right:1px solid var(--border);overflow:hidden}
+#sidebar-header{padding:14px 18px 12px;border-bottom:1px solid var(--border);flex:none}
+#sidebar-header h1{font-size:13px;font-weight:700;letter-spacing:.05em;color:var(--text)}
+#sidebar-header p{font-size:10px;color:var(--dim);margin-top:3px;font-family:var(--mono)}
+.conn-row{display:flex;align-items:center;gap:6px;margin-top:4px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:none}
+.dot.on{background:var(--green)}.dot.off{background:var(--red)}
+#conn-text{font-size:10px;color:var(--dim);font-family:var(--mono)}
+#sidebar-tabs{display:flex;border-bottom:1px solid var(--border);flex:none}
+.tab{flex:1;padding:8px 2px;text-align:center;font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;font-weight:700;color:var(--dim);cursor:pointer;border-bottom:2px solid transparent;transition:all .15s}
+.tab.active{color:var(--cyan);border-bottom-color:var(--cyan)}
+.tab:hover:not(.active){color:var(--text)}
+#sidebar-body{flex:1;overflow-y:auto;padding:14px 16px}
+#sidebar-body::-webkit-scrollbar{width:5px}
+#sidebar-body::-webkit-scrollbar-thumb{background:var(--border2)}
+.tab-pane{display:none}.tab-pane.active{display:block}
+.field{margin-bottom:10px}
+.field label{display:block;font-size:10px;font-family:var(--mono);color:var(--dim);letter-spacing:.04em;margin-bottom:4px}
+.field input,.field select,.field textarea{width:100%;background:var(--bg);border:1px solid var(--border2);color:var(--text);padding:6px 8px;font-size:12px;font-family:var(--mono);border-radius:2px;outline:none}
+.field input:focus,.field select:focus,.field textarea:focus{border-color:var(--cyan)}
+.field textarea{resize:vertical;min-height:60px}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.btn{background:var(--panel2);border:1px solid var(--border2);color:var(--text);padding:7px 12px;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;border-radius:2px;cursor:pointer;transition:all .15s;width:100%;margin-top:8px}
+.btn:hover:not(:disabled){border-color:var(--cyan);color:var(--cyan)}
+.btn:disabled{opacity:.35;cursor:not-allowed}
+.btn.primary{background:var(--cyan2);border-color:var(--cyan);color:#dff7fa}
+.btn.primary:hover:not(:disabled){background:var(--cyan);color:#071820}
+.btn.sm{padding:5px 9px;font-size:9.5px;margin-top:0}
+.btn.danger{background:var(--red2);border-color:var(--red);color:#fde8e7}
+.btn.amber{background:var(--amber2);border-color:var(--amber);color:#fdf2dc}
+.section-hd{font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--faint);font-weight:700;margin:14px 0 7px;padding-bottom:4px;border-bottom:1px solid var(--border)}
+.statgrid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:8px 0}
+.statgrid.three{grid-template-columns:1fr 1fr 1fr}
+.stat{background:var(--bg);border:1px solid var(--border);padding:8px 10px;border-radius:2px}
+.stat .v{font-family:var(--mono);font-size:14px;font-weight:700;color:var(--cyan)}
+.stat .v.red{color:var(--red)}.stat .v.amber{color:var(--amber)}.stat .v.green{color:var(--green)}
+.stat .l{font-size:9px;color:var(--faint);letter-spacing:.05em;text-transform:uppercase;margin-top:2px}
+.status-bar{padding:7px 10px;border-radius:2px;font-family:var(--mono);font-size:10.5px;margin:8px 0;border:1px solid var(--border)}
+.status-bar.pending,.status-bar.queued{color:var(--dim)}
+.status-bar.running{color:var(--amber);border-color:var(--amber2)}
+.status-bar.done{color:var(--green);border-color:var(--green2)}
+.status-bar.failed{color:var(--red);border-color:var(--red2)}
+.alert-box{padding:8px 10px;border-radius:2px;font-size:10.5px;margin:6px 0;border-left:3px solid}
+.alert-box.info{border-color:var(--purple);background:rgba(139,127,245,.07);color:var(--dim)}
+.alert-box.warn{border-color:var(--amber);background:rgba(224,156,53,.07);color:var(--amber)}
+.alert-box.err{border-color:var(--red);background:rgba(224,82,72,.07);color:var(--red)}
+.layer-row{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border)}
+.layer-row:last-child{border-bottom:none}
+.layer-swatch{width:10px;height:10px;border-radius:50%;flex:none}
+.lname{flex:1;font-size:11px;color:var(--text)}.lcount{font-size:10px;color:var(--dim);font-family:var(--mono)}
+.toggle{width:34px;height:18px;border-radius:9px;background:var(--border2);position:relative;cursor:pointer;flex:none;transition:background .2s}
+.toggle.on{background:var(--cyan2)}.toggle::after{content:'';position:absolute;width:12px;height:12px;border-radius:50%;background:var(--dim);top:3px;left:3px;transition:all .2s}
+.toggle.on::after{background:var(--cyan);left:19px}
+.risk-item{padding:7px 8px;border:1px solid var(--border);border-radius:2px;margin-bottom:5px;cursor:pointer;transition:border-color .15s}
+.risk-item:hover{border-color:var(--amber)}
+.risk-header{display:flex;align-items:center;gap:6px}
+.risk-badge{padding:2px 6px;border-radius:10px;font-size:9.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+.risk-badge.critical{background:rgba(224,82,72,.2);color:#f5958f}
+.risk-badge.high{background:rgba(224,156,53,.2);color:#f0b55a}
+.risk-badge.medium{background:rgba(139,127,245,.2);color:#a99ff8}
+.risk-badge.low{background:rgba(77,191,130,.2);color:#7ddba8}
+.risk-pid{font-family:var(--mono);font-size:10.5px;color:var(--dim);flex:1}
+.risk-drivers{font-size:10px;color:var(--faint);margin-top:3px}
+.risk-bar-bg{background:var(--border);height:3px;border-radius:2px;margin-top:5px}
+.risk-bar{height:3px;border-radius:2px;transition:width .4s}
+#balance-chart{width:100%;height:130px;background:var(--bg);border:1px solid var(--border);border-radius:2px;margin:8px 0;display:block}
+.leak-item{display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--bg);border:1px solid var(--border);border-radius:2px;margin-bottom:5px}
+.leak-item .li-dot{width:8px;height:8px;border-radius:50%;background:var(--red);flex:none}
+.leak-item .li-info{flex:1;font-size:10.5px;font-family:var(--mono);color:var(--dim)}
+.leak-item .li-info b{color:var(--text)}
+.leak-del{background:none;border:none;color:var(--faint);cursor:pointer;font-size:14px;padding:0 4px}
+.leak-del:hover{color:var(--red)}
+#upload-drop{border:2px dashed var(--border2);border-radius:3px;padding:18px;text-align:center;color:var(--faint);font-size:11px;cursor:pointer;transition:all .2s;margin-bottom:8px}
+#upload-drop:hover,#upload-drop.over{border-color:var(--cyan);color:var(--cyan);background:rgba(63,199,214,.04)}
+#map{flex:1;background:#080e12;position:relative}
+.leaflet-container{background:#080e12}
+.leaflet-control-zoom a{background:var(--panel)!important;color:var(--text)!important;border-color:var(--border)!important}
+.leaflet-control-zoom a:hover{background:var(--panel2)!important;color:var(--cyan)!important}
+#map-toolbar{position:absolute;top:12px;left:12px;z-index:900;display:flex;gap:6px;flex-wrap:wrap}
+.mbtool{background:rgba(17,26,31,.92);border:1px solid var(--border);color:var(--dim);padding:6px 10px;font-size:9.5px;font-family:var(--mono);letter-spacing:.04em;cursor:pointer;border-radius:2px}
+.mbtool.active,.mbtool:hover{border-color:var(--cyan);color:var(--cyan)}
+.mbtool.leak-mode{border-color:var(--red);color:var(--red)}
+#map-legend{position:absolute;bottom:14px;left:14px;z-index:900;background:rgba(11,18,21,.93);border:1px solid var(--border);padding:8px 10px;border-radius:2px;display:none}
+.leg-row{display:flex;align-items:center;gap:7px;font-size:9.5px;color:var(--dim);margin:2px 0}
+.leg-dot{width:10px;height:10px;border-radius:50%;flex:none}
+.leg-line{width:16px;height:3px;flex:none}
+.tip{background:rgba(11,18,21,.95);border:1px solid var(--border2);padding:6px 9px;border-radius:2px;font-size:10.5px;font-family:var(--mono);color:var(--text);pointer-events:none}
+.zone-btn{width:100%;background:var(--bg);border:1px solid var(--border2);color:var(--dim);padding:7px 10px;border-radius:2px;text-align:left;cursor:pointer;font-size:11px;font-family:var(--mono);display:flex;align-items:center;gap:8px;margin-bottom:5px;transition:all .15s}
+.zone-btn:hover,.zone-btn.sel{border-color:var(--cyan);color:var(--text)}
+.zone-btn.sel{background:rgba(63,199,214,.06)}
+.zone-name{flex:1}.zone-badge{font-size:9px;color:var(--cyan);font-weight:700}
+</style>
+</head>
+<body>
+<div id="app">
+
+<aside id="sidebar">
+  <div id="sidebar-header">
+    <h1 id="sidebar-title">DUWASA — DMA LEAKAGE EXPLORER</h1>
+    <p>Hydraulic Simulation &amp; NRW Analysis</p>
+    <div class="conn-row"><div class="dot" id="cdot"></div><span id="conn-text">disconnected</span></div>
+  </div>
+
+  <div id="sidebar-tabs">
+    <div class="tab active" data-tab="connect" id="tab-connect-label">CONNECT</div>
+    <div class="tab" data-tab="layers">LAYERS</div>
+    <div class="tab" data-tab="simulate">SIMULATE</div>
+    <div class="tab" data-tab="results">RESULTS</div>
+  </div>
+
+  <div id="sidebar-body">
+
+    <!-- ── CONNECT ── -->
+    <div class="tab-pane active" id="tab-connect">
+      <div class="field"><label>SERVICE URL</label><input id="api-base" value="http://localhost:8080"/></div>
+      <div class="field"><label>API KEY</label><input id="api-key" type="password" placeholder="X-API-Key"/></div>
+      <button class="btn primary" id="btn-connect">Connect</button>
+      <button class="btn" id="btn-back-majiscope" style="display:none">Back to MajiScope</button>
+      <div id="err-connect"></div>
+
+      <div id="connect-ok" style="display:none">
+        <div class="section-hd">Select DMA File</div>
+        <div class="field"><label>GPKG FILE</label>
+          <select id="file-select"></select>
+        </div>
+        <div id="dma-layer-warn" class="alert-box warn" style="display:none"></div>
+
+        <div id="zone-picker" style="display:none">
+          <div class="section-hd">Select Zone</div>
+          <div id="zone-list"></div>
+        </div>
+
+        <button class="btn primary" id="btn-load">Load Layers onto Map</button>
+
+        <div id="upload-panel">
+          <div class="section-hd">Upload New Dataset</div>
+          <div id="upload-drop">
+            <div>Drop a .gpkg or .zip of shapefiles here</div>
+            <div style="margin-top:6px;font-size:10px">or click to browse</div>
+            <input id="upload-input" type="file" accept=".gpkg,.zip" style="display:none"/>
+          </div>
+          <div id="upload-status" style="display:none"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── LAYERS ── -->
+    <div class="tab-pane" id="tab-layers">
+      <div id="layer-placeholder" style="color:var(--faint);font-size:11px">Load a DMA file first.</div>
+      <div id="layer-controls" style="display:none">
+        <div class="section-hd">Network Statistics</div>
+        <div class="statgrid three" id="net-stats"></div>
+        <div id="connector-alert" style="display:none"></div>
+        <div class="section-hd">Layer Visibility</div>
+        <div id="layer-toggles"></div>
+      </div>
+    </div>
+
+    <!-- ── SIMULATE ── -->
+    <div class="tab-pane" id="tab-simulate">
+      <div id="sim-placeholder" style="color:var(--faint);font-size:11px">Load a DMA file first.</div>
+      <div id="sim-form" style="display:none">
+        <div class="field"><label>SCENARIO NAME</label><input type="text" id="sim-name" value="DMA baseline"/></div>
+        <div class="row2">
+          <div class="field"><label>DURATION (hrs)</label><input type="number" id="sim-dur" value="24"/></div>
+          <div class="field"><label>TIME STEP (min)</label><input type="number" id="sim-ts" value="60"/></div>
+        </div>
+        <div class="row2">
+          <div class="field"><label>BASE DEMAND (m³/h)</label><input type="number" id="sim-demand" value="0.011" step="0.001"/></div>
+          <div class="field"><label>LEAKAGE FRACTION</label><input type="number" id="sim-lf" value="0.20" step="0.01"/></div>
+        </div>
+
+        <div class="section-hd">Leak Reports
+          <span style="font-size:9px;font-weight:400;color:var(--faint);margin-left:8px">click map in leak mode to add</span>
+        </div>
+        <div id="leak-list"><div style="color:var(--faint);font-size:11px">No leak reports yet.</div></div>
+        <button class="btn amber" id="btn-leak-mode" style="margin-top:6px">Mark Leak on Map</button>
+
+        <button class="btn primary" id="btn-run">Run Simulation</button>
+        <div id="sim-status" style="display:none"></div>
+        <div id="err-sim" style="color:var(--red);font-size:10.5px;margin-top:6px;font-family:var(--mono)"></div>
+      </div>
+    </div>
+
+    <!-- ── RESULTS ── -->
+    <div class="tab-pane" id="tab-results">
+      <div id="res-placeholder" style="color:var(--faint);font-size:11px">Run a simulation first.</div>
+      <div id="res-content" style="display:none">
+        <div class="section-hd">Simulation Summary</div>
+        <div class="statgrid" id="res-summary"></div>
+
+        <div class="section-hd">Non-Revenue Water</div>
+        <div class="statgrid" id="nrw-grid"></div>
+
+        <div class="section-hd">Pressure Zones</div>
+        <div id="pressure-zones"></div>
+
+        <div class="section-hd">Flow Balance (hourly)</div>
+        <canvas id="balance-chart"></canvas>
+
+        <div class="section-hd">High-Risk Pipes (top 20)</div>
+        <div id="risk-list"></div>
+
+        <div id="res-warnings"></div>
+
+        <div class="section-hd">Time Step</div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:4px">
+          <input type="range" id="time-slider" min="0" max="23" value="0" style="flex:1;accent-color:var(--cyan)"/>
+          <span id="time-val" style="font-family:var(--mono);font-size:11px;color:var(--amber);width:40px">0h</span>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- sidebar-body -->
+</aside>
+
+<main id="map">
+  <div id="map-toolbar"></div>
+  <div id="map-legend">
+    <div class="leg-row"><div class="leg-line" style="background:var(--cyan)"></div>Pipes</div>
+    <div class="leg-row"><div class="leg-dot" style="background:#4adf6e"></div>Borehole</div>
+    <div class="leg-row"><div class="leg-dot" style="background:var(--blue)"></div>Tank</div>
+    <div class="leg-row"><div class="leg-dot" style="background:#e0c048"></div>Valve</div>
+    <div class="leg-row"><div class="leg-dot" style="background:#d67bf0"></div>Bulk meter</div>
+    <div class="leg-row"><div class="leg-line" style="background:var(--purple);border-bottom:2px dashed var(--purple)"></div>Connector</div>
+    <div class="leg-row"><div class="leg-dot" style="background:var(--red)"></div>Leak / Critical risk</div>
+    <div class="leg-row"><div class="leg-dot" style="background:var(--amber)"></div>High risk</div>
+    <div class="leg-row"><div class="leg-dot" style="background:var(--green)"></div>Low pressure</div>
+  </div>
+</main>
+
+</div>
+<script>
+(function(){"use strict";
+// ── state ──────────────────────────────────────────────────────────────────
+const S={
+  base:"http://localhost:8080",key:"",file:null,zoneName:null,
+  scenarioId:null,pollTimer:null,leakMode:false,leakReports:[],
+  integrated:false,sessionId:null,launchToken:null,returnUrl:"http://localhost:3000/dashboard",
+};
+
+// ── map ────────────────────────────────────────────────────────────────────
+const map=L.map("map",{preferCanvas:true,zoomControl:false}).setView([-6.13,35.84],14);
+L.control.zoom({position:"topright"}).addTo(map);
+L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",{
+  attribution:"&copy; OSM &copy; CARTO",maxZoom:20,subdomains:"abcd"}).addTo(map);
+
+const LG={
+  boundary:L.layerGroup().addTo(map),pipes:L.layerGroup().addTo(map),
+  connectors:L.layerGroup().addTo(map),sources:L.layerGroup().addTo(map),
+  tanks:L.layerGroup().addTo(map),valves:L.layerGroup().addTo(map),
+  bulk_meters:L.layerGroup().addTo(map),sim_nodes:L.layerGroup().addTo(map),
+  hotspots:L.layerGroup().addTo(map),leaks:L.layerGroup().addTo(map),
+};
+
+// ── helpers ────────────────────────────────────────────────────────────────
+const $=id=>document.getElementById(id);
+function tab(name){
+  document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active",t.dataset.tab===name));
+  document.querySelectorAll(".tab-pane").forEach(p=>p.classList.toggle("active",p.id==="tab-"+name));
+}
+function err(id,msg){const e=$(id);if(!e)return;e.textContent=msg||"";e.style.display=msg?"block":"none";}
+function statusBar(id,cls,msg){const e=$(id);e.style.display="block";e.className="status-bar "+cls.toLowerCase();e.textContent=`[${cls.toUpperCase()}] ${msg||""}`;}
+
+async function api(path,opts={}){
+  const h={"Content-Type":"application/json",...(opts.headers||{})};
+  if(S.key) h["X-API-Key"]=S.key;
+  if(S.integrated && S.launchToken && S.sessionId){
+    h["X-MajiScope-Launch-Token"]=S.launchToken;
+    h["X-MajiScope-Session-Id"]=S.sessionId;
+  }
+  const r=await fetch(S.base.replace(/\/$/,"")+path,{...opts,headers:h});
+  if(!r.ok){let d=r.statusText;try{const j=await r.json();d=j.detail||JSON.stringify(j);}catch(e){}throw new Error(`${r.status}: ${d}`);}
+  return r.json();
+}
+
+document.querySelectorAll(".tab").forEach(t=>t.addEventListener("click",()=>tab(t.dataset.tab)));
+
+function initIntegratedLaunch(){
+  const params=new URLSearchParams(window.location.search);
+  const launchToken=params.get("launch_token");
+  const sessionId=params.get("session_id");
+  const file=params.get("file");
+  const returnUrl=params.get("return_url");
+  const utilityName=params.get("utility_name");
+  const dmaName=params.get("dma_name");
+  if(!launchToken||!sessionId||!file) return;
+
+  S.integrated=true;
+  S.launchToken=launchToken;
+  S.sessionId=sessionId;
+  S.file=file;
+  S.base=window.location.origin;
+  if(returnUrl) S.returnUrl=returnUrl;
+
+  if(utilityName||dmaName){
+    const utilityLabel=(utilityName||"Utility").trim();
+    const dmaLabel=(dmaName||"Selected DMA").trim();
+    $("sidebar-title").textContent=`${utilityLabel} — ${dmaLabel}`;
+  }
+  $("tab-connect-label").textContent="MAJISCOPE";
+  $("api-base").value=S.base;
+  $("api-key").value="";
+  $("api-base").closest(".field").style.display="none";
+  $("api-key").closest(".field").style.display="none";
+  $("btn-connect").style.display="none";
+  $("btn-back-majiscope").style.display="block";
+  $("upload-panel").style.display="none";
+  tab("connect");
+  $("btn-back-majiscope").addEventListener("click",async()=>{
+    try{
+      await api(`/majiscope/cleanup/${encodeURIComponent(S.sessionId)}`,{method:"POST"});
+    }catch(e){}
+    window.location.href=S.returnUrl;
+  });
+
+  setTimeout(async()=>{
+    try{
+      const h=await fetch(S.base.replace(/\/$/,"")+"/health");
+      if(!h.ok) throw new Error("Service unreachable");
+      $("cdot").className="dot on"; $("conn-text").textContent="connected from MajiScope";
+      await loadFiles(file);
+      $("connect-ok").style.display="block";
+      await loadZones();
+      await $("btn-load").click();
+    }catch(e){
+      $("cdot").className="dot off"; $("conn-text").textContent="failed";
+      err("err-connect",e.message);
+    }
+  },0);
+}
+
+// ── CONNECT ────────────────────────────────────────────────────────────────
+$("btn-connect").addEventListener("click",async()=>{
+  S.base=$("api-base").value.trim(); S.key=$("api-key").value.trim();
+  err("err-connect",null);
+  try{
+    const h=await fetch(S.base.replace(/\/$/,"")+"/health");
+    if(!h.ok) throw new Error("Service unreachable");
+    $("cdot").className="dot on"; $("conn-text").textContent="connected";
+    await loadFiles();
+    $("connect-ok").style.display="block";
+  }catch(e){
+    $("cdot").className="dot off"; $("conn-text").textContent="failed";
+    err("err-connect",e.message);
+  }
+});
+
+async function loadFiles(preferredFile=null){
+  const files=await api("/files");
+  const sel=$("file-select");
+  sel.innerHTML=files.map(f=>{
+    const warn=f.missing_layers.length?"⚠ ":"";
+    return `<option value="${f.filename}" data-ok="${f.has_dma_structure}">${warn}${f.filename} (${f.size_kb}KB)</option>`;
+  }).join("");
+  if(!files.length) sel.innerHTML='<option>No .gpkg files found</option>';
+  else{
+    const selected=files.find(f=>f.filename===preferredFile)||files[0];
+    S.file=selected.filename;
+    sel.value=selected.filename;
+    checkFileStructure(selected);
+    loadZones();
+  }
+  sel.onchange=async()=>{
+    S.file=sel.value; S.zoneName=null;
+    const f=files.find(x=>x.filename===S.file);
+    if(f) checkFileStructure(f);
+    await loadZones();
+  };
+}
+
+initIntegratedLaunch();
+
+function checkFileStructure(f){
+  const w=$("dma-layer-warn");
+  if(!f.has_dma_structure){
+    w.style.display="block";
+    w.textContent=`Missing required layers: ${f.missing_layers.join(", ")}. Upload a complete DMA GeoPackage.`;
+  } else {
+    w.style.display="none";
+  }
+}
+
+async function loadZones(){
+  if(!S.file) return;
+  try{
+    const d=await api(`/dma/${encodeURIComponent(S.file)}/zones`);
+    const zp=$("zone-picker"), zl=$("zone-list");
+    if(d.count<=1){zp.style.display="none"; S.zoneName=null; return;}
+    zp.style.display="block";
+    zl.innerHTML=d.zones.map(z=>`
+      <div class="zone-btn" data-name="${z.name}">
+        <div class="zone-name">${z.name}</div>
+        <div class="zone-badge">FID ${z.fid}</div>
+      </div>`).join("");
+    document.querySelectorAll(".zone-btn").forEach(b=>{
+      b.addEventListener("click",()=>{
+        document.querySelectorAll(".zone-btn").forEach(x=>x.classList.remove("sel"));
+        b.classList.add("sel");
+        S.zoneName=b.dataset.name;
+      });
+    });
+    document.querySelector(".zone-btn")?.classList.add("sel");
+    S.zoneName=d.zones[0]?.name||null;
+  }catch(e){/* single-zone file — fine */}
+}
+
+// ── UPLOAD ─────────────────────────────────────────────────────────────────
+const drop=$("upload-drop"), inp=$("upload-input");
+drop.addEventListener("click",()=>inp.click());
+drop.addEventListener("dragover",e=>{e.preventDefault();drop.classList.add("over");});
+drop.addEventListener("dragleave",()=>drop.classList.remove("over"));
+drop.addEventListener("drop",e=>{e.preventDefault();drop.classList.remove("over");doUpload(e.dataTransfer.files[0]);});
+inp.addEventListener("change",()=>{ if(inp.files[0]) doUpload(inp.files[0]); });
+
+async function doUpload(file){
+  if(!file) return;
+  const us=$("upload-status");
+  us.style.display="block"; us.className="status-bar running"; us.textContent="[UPLOADING] "+file.name+"…";
+  try{
+    const fd=new FormData(); fd.append("file",file);
+    const h={}; if(S.key) h["X-API-Key"]=S.key;
+    const r=await fetch(S.base.replace(/\/$/,"")+"/files/upload",{method:"POST",headers:h,body:fd});
+    if(!r.ok){const j=await r.json();throw new Error(j.detail||r.statusText);}
+    const d=await r.json();
+    us.className="status-bar done";
+    us.textContent="[DONE] "+d.message;
+    await loadFiles();
+  }catch(e){
+    us.className="status-bar failed";
+    us.textContent="[FAILED] "+e.message;
+  }
+}
+
+// ── LOAD LAYERS ────────────────────────────────────────────────────────────
+$("btn-load").addEventListener("click",async()=>{
+  if(!S.file) return;
+  try{
+    const q=S.zoneName?`?zone_name=${encodeURIComponent(S.zoneName)}`:"";
+    const d=await api(`/dma/${encodeURIComponent(S.file)}/layers${q}`);
+    renderLayers(d);
+    $("layer-placeholder").style.display="none";
+    $("layer-controls").style.display="block";
+    $("sim-placeholder").style.display="none";
+    $("sim-form").style.display="block";
+    buildToolbar();
+    $("map-legend").style.display="block";
+    tab("layers");
+  }catch(e){err("err-connect",e.message);}
+});
+
+function renderLayers(d){
+  Object.values(LG).forEach(g=>g.clearLayers());
+
+  // DMA boundary
+  L.geoJSON(d.boundary,{style:()=>({color:"#3fc7d6",weight:2,fillOpacity:.04,dashArray:"6 4"})})
+    .addTo(LG.boundary);
+  try{map.fitBounds(L.geoJSON(d.boundary).getBounds(),{padding:[30,30]});}catch(e){}
+
+  // Pipes
+  L.geoJSON(d.pipes,{
+    style:f=>({
+      color:f.properties.hw_c>=140?"#3fc7d6":f.properties.hw_c>=130?"#5aaddf":"#8ba0ad",
+      weight:Math.max(1.5,Math.min(4,f.properties.diam_mm/40)),opacity:.7,
+    }),
+    onEachFeature:(f,l)=>l.bindTooltip(
+      `<div class="tip"><b>Pipe ${f.properties.fid}</b><br>`+
+      `&oslash;${f.properties.diam_mm}mm &bull; ${f.properties.material} &bull; C=${f.properties.hw_c}<br>`+
+      `${f.properties.length_m}m</div>`,{sticky:true})
+  }).addTo(LG.pipes);
+
+  // Sources
+  (d.sources.features||[]).forEach(f=>{
+    const [lon,lat]=f.geometry.coordinates,p=f.properties;
+    L.circleMarker([lat,lon],{radius:9,color:"#071820",weight:2,fillColor:"#4adf6e",fillOpacity:1})
+      .bindTooltip(`<div class="tip"><b>${p.name}</b><br>Borehole ${p.elev_m}m ASL<br>Yield: ${p.yield_m3h||"?"}m³/h · Head: ${p.total_head_m}m</div>`,{sticky:true})
+      .addTo(LG.sources);
+  });
+
+  // Tanks
+  (d.tanks.features||[]).forEach(f=>{
+    const [lon,lat]=f.geometry.coordinates,p=f.properties;
+    L.circleMarker([lat,lon],{radius:9,color:"#071820",weight:2,fillColor:"#5aaddf",fillOpacity:1})
+      .bindTooltip(`<div class="tip"><b>${p.name}</b><br>Tank ${p.elev_m}m ASL<br>Cap: ${p.cap_m3||"?"}m³ · D: ${p.diameter_m}m</div>`,{sticky:true})
+      .addTo(LG.tanks);
+  });
+
+  // Valves
+  (d.valves.features||[]).forEach(f=>{
+    const [lon,lat]=f.geometry.coordinates,p=f.properties;
+    L.circleMarker([lat,lon],{radius:4,color:"#071820",weight:1.5,fillColor:p.is_isolation?"#e0c048":"#bfc0c8",fillOpacity:.9})
+      .bindTooltip(`<div class="tip">${p.valve_type}<br>&oslash;${p.diam_mm}mm</div>`,{sticky:true})
+      .addTo(LG.valves);
+  });
+
+  // Bulk meters
+  (d.bulk_meters.features||[]).forEach(f=>{
+    const [lon,lat]=f.geometry.coordinates;
+    L.circleMarker([lat,lon],{radius:8,color:"#071820",weight:2,fillColor:"#d67bf0",fillOpacity:1})
+      .bindTooltip(`<div class="tip"><b>Bulk Meter</b><br>${f.properties.name}</div>`,{sticky:true})
+      .addTo(LG.bulk_meters);
+  });
+
+  // Stats
+  const st=d.stats;
+  $("net-stats").innerHTML=`
+    <div class="stat"><div class="v">${st.pipe_count}</div><div class="l">Pipes</div></div>
+    <div class="stat"><div class="v">${st.source_count}</div><div class="l">Sources</div></div>
+    <div class="stat"><div class="v">${st.tank_count}</div><div class="l">Tanks</div></div>
+    <div class="stat"><div class="v">${st.valve_count}</div><div class="l">Valves</div></div>
+    <div class="stat"><div class="v">${st.bulk_meter_count}</div><div class="l">Bulk meters</div></div>
+    <div class="stat"><div class="v">${(st.total_pipe_length_m/1000).toFixed(2)}</div><div class="l">km pipes</div></div>`;
+
+  buildLayerToggles(d);
+}
+
+function buildLayerToggles(d){
+  const defs=[
+    {id:"boundary",label:"DMA boundary",count:"1 polygon",color:"var(--cyan)"},
+    {id:"pipes",label:"Distribution pipes",count:d.stats.pipe_count,color:"var(--cyan)"},
+    {id:"sources",label:"Water sources",count:d.stats.source_count,color:"#4adf6e"},
+    {id:"tanks",label:"Storage tanks",count:d.stats.tank_count,color:"var(--blue)"},
+    {id:"valves",label:"Valves",count:d.stats.valve_count,color:"#e0c048"},
+    {id:"bulk_meters",label:"Bulk meters",count:d.stats.bulk_meter_count,color:"#d67bf0"},
+    {id:"connectors",label:"Connectors (synthetic)",count:"–",color:"var(--purple)"},
+    {id:"sim_nodes",label:"Pressure results",count:"–",color:"var(--amber)"},
+    {id:"hotspots",label:"Leakage hotspots",count:"–",color:"var(--red)"},
+    {id:"leaks",label:"Reported leaks",count:"–",color:"var(--red)"},
+  ];
+  $("layer-toggles").innerHTML=defs.map(d=>`
+    <div class="layer-row">
+      <div class="layer-swatch" style="background:${d.color}"></div>
+      <div class="lname">${d.label}</div>
+      <div class="lcount" id="lc-${d.id}">${d.count}</div>
+      <div class="toggle on" data-lid="${d.id}"></div>
+    </div>`).join("");
+  document.querySelectorAll(".toggle").forEach(t=>{
+    t.addEventListener("click",()=>{
+      const on=t.classList.toggle("on");
+      if(on) map.addLayer(LG[t.dataset.lid]);
+      else   map.removeLayer(LG[t.dataset.lid]);
+    });
+  });
+}
+
+function buildToolbar(){
+  $("map-toolbar").innerHTML=`
+    <div class="mbtool" id="mb-fit">FIT</div>
+    <div class="mbtool" id="mb-pipes">PIPES</div>
+    <div class="mbtool" id="mb-pressure">PRESSURE</div>
+    <div class="mbtool" id="mb-risk">RISK</div>
+    <div class="mbtool" id="mb-leak-tog">LEAK REPORT MODE: OFF</div>`;
+  $("mb-fit").onclick=()=>{try{map.fitBounds(LG.pipes.getLayers()[0]?.getBounds()||LG.boundary.getLayers()[0]?.getBounds(),{padding:[20,20]});}catch(e){}};
+  $("mb-pipes").onclick=()=>showOnlyLayer("pipes");
+  $("mb-pressure").onclick=()=>showOnlyLayer("sim_nodes");
+  $("mb-risk").onclick=()=>showOnlyLayer("hotspots");
+  $("mb-leak-tog").onclick=toggleLeakMode;
+  // sync with sidebar button
+  $("btn-leak-mode").onclick=toggleLeakMode;
+}
+
+function showOnlyLayer(active){
+  ["pipes","sim_nodes","hotspots"].forEach(lid=>{
+    if(lid===active) map.addLayer(LG[lid]); else map.removeLayer(LG[lid]);
+    document.querySelectorAll(`.toggle[data-lid="${lid}"]`).forEach(t=>t.classList.toggle("on",lid===active));
+  });
+  map.addLayer(LG.boundary); map.addLayer(LG.leaks);
+}
+
+function toggleLeakMode(){
+  S.leakMode=!S.leakMode;
+  const tog=$("mb-leak-tog"), btn=$("btn-leak-mode");
+  if(S.leakMode){
+    tog.classList.add("leak-mode"); tog.textContent="LEAK REPORT MODE: ON";
+    if(btn){btn.classList.add("danger");btn.textContent="Cancel Leak Mode";}
+    map.getContainer().style.cursor="crosshair";
+  } else {
+    tog.classList.remove("leak-mode"); tog.textContent="LEAK REPORT MODE: OFF";
+    if(btn){btn.classList.remove("danger");btn.textContent="Mark Leak on Map";}
+    map.getContainer().style.cursor="";
+  }
+}
+
+// ── LEAK REPORTS ───────────────────────────────────────────────────────────
+map.on("click",e=>{
+  if(!S.leakMode) return;
+  const {lat,lng}=e.latlng;
+  const id=Date.now();
+  S.leakReports.push({id,lat,lon:lng,diameter_m:0.01,start_time_s:0,end_time_s:86400,description:""});
+  L.circleMarker([lat,lng],{radius:8,color:"#fde8e7",weight:2,fillColor:"#e05248",fillOpacity:.9})
+    .bindTooltip(`<div class="tip">Leak report<br>${lat.toFixed(5)}, ${lng.toFixed(5)}</div>`,{sticky:true})
+    .addTo(LG.leaks);
+  renderLeakList();
+  toggleLeakMode();  // auto-exit leak mode after placing
+});
+
+function renderLeakList(){
+  const el=$("leak-list");
+  if(!S.leakReports.length){el.innerHTML='<div style="color:var(--faint);font-size:11px">No leak reports yet.</div>';return;}
+  el.innerHTML=S.leakReports.map((lr,i)=>`
+    <div class="leak-item">
+      <div class="li-dot"></div>
+      <div class="li-info"><b>Report ${i+1}</b> — ${lr.lat.toFixed(5)}, ${lr.lon.toFixed(5)}<br>
+        diam: <input type="number" value="${lr.diameter_m}" step="0.001" style="width:55px;font-size:10px;padding:2px 4px;background:var(--bg);border:1px solid var(--border2);color:var(--text)" data-field="diameter_m" data-id="${lr.id}"/>m
+      </div>
+      <button class="leak-del" data-id="${lr.id}" title="Remove">✕</button>
+    </div>`).join("");
+  el.querySelectorAll("input[data-field]").forEach(inp=>{
+    inp.oninput=()=>{
+      const lr=S.leakReports.find(r=>r.id==inp.dataset.id);
+      if(lr) lr[inp.dataset.field]=parseFloat(inp.value)||0.01;
+    };
+  });
+  el.querySelectorAll(".leak-del").forEach(btn=>{
+    btn.onclick=()=>{
+      S.leakReports=S.leakReports.filter(r=>r.id!=btn.dataset.id);
+      renderLeakList();
+      LG.leaks.clearLayers();
+      S.leakReports.forEach(lr=>{
+        L.circleMarker([lr.lat,lr.lon],{radius:8,color:"#fde8e7",weight:2,fillColor:"#e05248",fillOpacity:.9}).addTo(LG.leaks);
+      });
+    };
+  });
+}
+
+// ── SIMULATE ───────────────────────────────────────────────────────────────
+$("btn-run").addEventListener("click",async()=>{
+  if(!S.file) return;
+  err("err-sim",null);
+  $("sim-status").style.display="none";
+  try{
+    const body={
+      name:$("sim-name").value||"DMA run",
+      duration_hrs:parseInt($("sim-dur").value)||24,
+      time_step_min:parseInt($("sim-ts").value)||60,
+      base_demand_m3h:parseFloat($("sim-demand").value)||0.011,
+      leakage_frac:parseFloat($("sim-lf").value)||0.20,
+      zone_name:S.zoneName||undefined,
+      leak_reports:S.leakReports.length?S.leakReports:undefined,
+    };
+    const resp=await api(`/dma/${encodeURIComponent(S.file)}/simulate`,{method:"POST",body:JSON.stringify(body)});
+    S.scenarioId=resp.id;
+    statusBar("sim-status","running","queued — scenario #"+resp.id);
+
+    // Show synthetic connectors
+    const tr=resp.topology_repair||{};
+    const ca=$("connector-alert");
+    if(tr.connectors_added>0 && tr.connectors_geojson){
+      LG.connectors.clearLayers();
+      L.geoJSON(tr.connectors_geojson,{
+        style:()=>({color:"#8b7ff5",weight:2.5,dashArray:"6 4",opacity:.85}),
+        onEachFeature:(f,l)=>l.bindTooltip(`<div class="tip">${f.properties.id}<br>${f.properties.length_m}m synthetic connector</div>`,{sticky:true})
+      }).addTo(LG.connectors);
+      $("lc-connectors").textContent=tr.connectors_added;
+      ca.style.display="block"; ca.className="alert-box info";
+      ca.innerHTML=`<b>${tr.connectors_added} synthetic connector pipe${tr.connectors_added>1?"s":""}</b> added to close topology gaps (${tr.total_connector_length_m}m). Verify in the field.`;
+    } else {
+      ca.style.display="none";
+    }
+
+    if(S.pollTimer) clearInterval(S.pollTimer);
+    S.pollTimer=setInterval(poll,2500); poll();
+  }catch(e){err("err-sim",e.message);}
+});
+
+async function poll(){
+  if(!S.scenarioId) return;
+  try{
+    const d=await api(`/simulate/${S.scenarioId}`);
+    if(d.status==="PENDING"||d.status==="RUNNING"){
+      statusBar("sim-status",d.status,"simulating…");
+    } else if(d.status==="DONE"){
+      clearInterval(S.pollTimer);
+      statusBar("sim-status","done","complete — loading results…");
+      renderSummary(d.summary||{});
+      await loadResults(0);
+      const lr=await api(`/dma/${encodeURIComponent(S.file)}/simulate/${S.scenarioId}/leakage`);
+      renderLeakage(lr);
+      tab("results");
+    } else {
+      clearInterval(S.pollTimer);
+      statusBar("sim-status","failed",d.error_message||"unknown error");
+    }
+  }catch(e){clearInterval(S.pollTimer);err("err-sim",e.message);}
+}
+
+function renderSummary(s){
+  const c=v=>v>45?"red":v<7?"green":"";
+  $("res-summary").innerHTML=`
+    <div class="stat"><div class="v ${c(s.pressure_avg_m)}">${s.pressure_avg_m??"-"}</div><div class="l">Avg Pres. m</div></div>
+    <div class="stat"><div class="v">${s.pressure_min_m??"-"}</div><div class="l">Min Pres. m</div></div>
+    <div class="stat"><div class="v">${s.pressure_max_m??"-"}</div><div class="l">Max Pres. m</div></div>
+    <div class="stat"><div class="v ${s.low_pressure_nodes>0?"red":""}">${s.low_pressure_nodes??0}</div><div class="l">Low-pres. nodes</div></div>
+    <div class="stat"><div class="v">${s.total_pipes??"-"}</div><div class="l">Pipes</div></div>
+    <div class="stat"><div class="v">${s.time_steps??"-"}</div><div class="l">Time steps</div></div>`;
+  $("time-slider").max=Math.max(0,(s.time_steps||1)-1);
+  $("res-placeholder").style.display="none";
+  $("res-content").style.display="block";
+}
+
+async function loadResults(step){
+  LG.sim_nodes.clearLayers();
+  try{
+    const [nj,pj]=await Promise.all([
+      api(`/simulate/${S.scenarioId}/geojson/nodes?time_step=${step}`),
+      api(`/simulate/${S.scenarioId}/geojson/pipes?time_step=${step}`),
+    ]);
+    nj.features.forEach(f=>{
+      if(!f.geometry) return;
+      const [lon,lat]=f.geometry.coordinates, p=f.properties;
+      const col=p.is_low_pressure?"#4dbf82":p.pressure>45?"#e05248":p.pressure>30?"#e09c35":"#5aaddf";
+      L.circleMarker([lat,lon],{radius:p.is_low_pressure?6:4,color:"#080e12",weight:1,fillColor:col,fillOpacity:.9})
+        .bindTooltip(`<div class="tip"><b>${p.element_id}</b><br>Pressure: ${p.pressure??"-"}m${p.is_low_pressure?" ⚠ LOW":""}</div>`,{sticky:true})
+        .addTo(LG.sim_nodes);
+    });
+    map.addLayer(LG.sim_nodes);
+  }catch(e){}
+}
+
+$("time-slider").addEventListener("change",e=>{
+  $("time-val").textContent=e.target.value+"h";
+  if(S.scenarioId) loadResults(parseInt(e.target.value));
+});
+
+function renderLeakage(d){
+  const nrw=d.nrw;
+  const fb=d.epanet_flow_balance;
+  // NRW grid – prefer real .rpt figures
+  const inflow=fb?.total_inflow_m3h??nrw.system_input_m3h;
+  const demand=fb?.consumer_demand_m3h??nrw.authorised_m3h;
+  const nrwPct=fb?(100*(inflow-demand)/inflow).toFixed(1)+"%":nrw.nrw_pct+"%";
+  const ilicol=nrw.ili>8?"red":nrw.ili>4?"amber":"green";
+  $("nrw-grid").innerHTML=`
+    <div class="stat"><div class="v ${parseFloat(nrwPct)>30?"red":parseFloat(nrwPct)>20?"amber":"green"}">${nrwPct}</div><div class="l">NRW%</div></div>
+    <div class="stat"><div class="v">${(inflow-demand).toFixed(2)}</div><div class="l">NRW m³/h</div></div>
+    <div class="stat"><div class="v">${inflow.toFixed(2)}</div><div class="l">Inflow m³/h</div></div>
+    <div class="stat"><div class="v">${demand.toFixed(2)}</div><div class="l">Demand m³/h</div></div>
+    <div class="stat"><div class="v">${nrw.real_loss_m3h}</div><div class="l">Real loss m³/h</div></div>
+    <div class="stat"><div class="v ${ilicol}">${nrw.ili}</div><div class="l">ILI</div></div>`;
+
+  // Pressure zones
+  $("pressure-zones").innerHTML=(d.pressure_zones||[]).map(z=>`
+    <div style="display:flex;align-items:center;gap:8px;margin:3px 0">
+      <div style="width:9px;height:9px;border-radius:50%;background:${z.zone==="low"?"var(--green)":z.zone==="high"?"var(--red)":"var(--blue)"};flex:none"></div>
+      <div style="flex:1;font-size:11px">${z.zone.toUpperCase()}</div>
+      <div style="font-family:var(--mono);font-size:10.5px;color:var(--cyan)">${z.count} nodes (${z.pct}%)</div>
+    </div>
+    <div style="background:var(--border);height:2px;border-radius:2px;margin-bottom:4px">
+      <div style="height:2px;border-radius:2px;width:${z.pct}%;background:${z.zone==="low"?"var(--green)":z.zone==="high"?"var(--red)":"var(--blue)"}"></div>
+    </div>`).join("");
+
+  // Balance chart
+  drawChart(d.timestep_balance||[]);
+
+  // Risk list
+  const risks=d.pipe_risks_top20||[];
+  $("risk-list").innerHTML=risks.map(r=>`
+    <div class="risk-item" data-lat="${r.lat}" data-lon="${r.lon}">
+      <div class="risk-header">
+        <span class="risk-badge ${r.risk_level}">${r.risk_level}</span>
+        <span class="risk-pid">${r.pipe_id}</span>
+        <span style="font-family:var(--mono);font-size:10px;color:var(--amber)">${(r.risk_score*100).toFixed(0)}%</span>
+      </div>
+      <div class="risk-drivers">${(r.drivers||[]).join(" · ")}</div>
+      <div class="risk-bar-bg"><div class="risk-bar" style="width:${r.risk_score*100}%;background:${r.risk_level==="critical"?"var(--red)":r.risk_level==="high"?"var(--amber)":"var(--purple)"}"></div></div>
+    </div>`).join("");
+  document.querySelectorAll(".risk-item").forEach(el=>{
+    el.addEventListener("click",()=>{
+      const lat=parseFloat(el.dataset.lat),lon=parseFloat(el.dataset.lon);
+      if(lat&&lon) map.flyTo([lat,lon],17,{duration:.8});
+    });
+  });
+
+  // Warnings
+  $("res-warnings").innerHTML=(d.warnings||[]).map(w=>
+    `<div class="alert-box warn" style="margin-top:6px">⚠ ${w}</div>`
+  ).join("");
+
+  // Hotspots on map
+  LG.hotspots.clearLayers();
+  (d.hotspots_geojson?.features||[]).forEach(f=>{
+    const [lon,lat]=f.geometry.coordinates,p=f.properties;
+    const col=p.risk_level==="critical"?"#e05248":p.risk_level==="high"?"#e09c35":"#8b7ff5";
+    L.circleMarker([lat,lon],{radius:p.risk_level==="critical"?8:6,color:"#080e12",weight:1.5,fillColor:col,fillOpacity:.9})
+      .bindTooltip(`<div class="tip"><b>${p.pipe_id}</b> <span style="color:${col}">${p.risk_level}</span><br>Score: ${(p.risk_score*100).toFixed(0)}%<br>${p.drivers}</div>`,{sticky:true})
+      .addTo(LG.hotspots);
+  });
+  $("lc-hotspots").textContent=d.hotspots_geojson?.features?.length||0;
+  map.addLayer(LG.hotspots);
+}
+
+function drawChart(balance){
+  const cv=$("balance-chart");
+  if(!cv||!balance.length) return;
+  const ctx=cv.getContext("2d");
+  cv.width=cv.offsetWidth||360; cv.height=130;
+  const W=cv.width,H=cv.height,pad={t:10,r:8,b:22,l:38};
+  ctx.fillStyle="#080e12"; ctx.fillRect(0,0,W,H);
+  const max=Math.max(...balance.map(b=>b.inflow_m3h),1);
+  const sx=i=>pad.l+(i/(balance.length-1||1))*(W-pad.l-pad.r);
+  const sy=v=>pad.t+(1-v/max)*(H-pad.t-pad.b);
+  // Grid
+  [.25,.5,.75,1].forEach(f=>{
+    ctx.strokeStyle="#1e2e36"; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(pad.l,sy(f*max)); ctx.lineTo(W-pad.r,sy(f*max)); ctx.stroke();
+    ctx.fillStyle="#3d5560"; ctx.font="9px monospace";
+    ctx.fillText((f*max).toFixed(1),2,sy(f*max)+3);
+  });
+  // Inflow
+  ctx.beginPath(); ctx.strokeStyle="#3fc7d6"; ctx.lineWidth=2;
+  balance.forEach((b,i)=>{i===0?ctx.moveTo(sx(i),sy(b.inflow_m3h)):ctx.lineTo(sx(i),sy(b.inflow_m3h));});
+  ctx.stroke();
+  // Demand
+  ctx.beginPath(); ctx.strokeStyle="#4dbf82"; ctx.lineWidth=1.5; ctx.setLineDash([3,3]);
+  balance.forEach((b,i)=>{i===0?ctx.moveTo(sx(i),sy(b.demand_m3h)):ctx.lineTo(sx(i),sy(b.demand_m3h));});
+  ctx.stroke(); ctx.setLineDash([]);
+  // NRW fill
+  ctx.beginPath(); ctx.fillStyle="rgba(224,82,72,.15)";
+  balance.forEach((b,i)=>{i===0?ctx.moveTo(sx(i),sy(b.inflow_m3h)):ctx.lineTo(sx(i),sy(b.inflow_m3h));});
+  for(let i=balance.length-1;i>=0;i--) ctx.lineTo(sx(i),sy(balance[i].demand_m3h));
+  ctx.closePath(); ctx.fill();
+  // X labels
+  ctx.fillStyle="#3d5560"; ctx.font="9px monospace";
+  balance.filter((_,i)=>i%4===0).forEach(b=>ctx.fillText(b.hour+"h",sx(b.hour)-7,H-6));
+  // Legend
+  ctx.fillStyle="#3fc7d6"; ctx.fillRect(W-70,H-20,14,2);
+  ctx.fillStyle="#7591a0"; ctx.font="9px monospace"; ctx.fillText("Inflow",W-52,H-17);
+  ctx.fillStyle="#4dbf82"; ctx.fillRect(W-70,H-10,14,2);
+  ctx.fillStyle="#7591a0"; ctx.fillText("Demand",W-52,H-7);
+}
+
+})();
+</script>
+</body>
+</html>

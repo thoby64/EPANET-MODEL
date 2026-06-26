@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: majiscope-hydraulic-model
+    env: docker
+    plan: starter
+    healthCheckPath: /health
+    disk:
+      name: hydraulic-model-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: API_KEYS
+        sync: false
+      - key: GPKG_DIR
+        value: /data/gpkg
+      - key: DATABASE_URL
+        value: sqlite+aiosqlite:////data/db/epanet_service.db
+      - key: MAJISCOPE_BACKEND_URL
+        value: https://full-nfjr.onrender.com
+      - key: MAJISCOPE_RETURN_URL
+        value: https://majiscope-2wzv.onrender.com/dashboard
+      - key: MAJISCOPE_LAUNCH_SECRET
+        sync: false
+      - key: MAJISCOPE_CALLBACK_SECRET
+        sync: false
+      - key: DEFAULT_DURATION_HRS
+        value: "24"
+      - key: DEFAULT_TIMESTEP_MIN
+        value: "60"
+      - key: DEFAULT_BASE_DEMAND
+        value: "0.001"
+      - key: MIN_PRESSURE_M
+        value: "7.0"
+      - key: MAX_VELOCITY_MS
+        value: "3.0"
+      - key: SERVICE_NAME
+        value: MajiScope Hydraulic Model
+      - key: SERVICE_VERSION
+        value: "1.0.0"
+      - key: DEBUG
+        value: "false"

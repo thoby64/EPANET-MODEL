@@ -1,0 +1,78 @@
+epanet_service_epytflow/
+├── app/
+│   ├── core/
+│   │   ├── auth.py                  API-key authentication (X-API-Key header)
+│   │   ├── config.py                Settings via pydantic-settings / .env
+│   │   ├── database.py              Async SQLite engine, session factory, auto-migration
+│   │   └── exceptions.py            HTTP exception helpers
+│   ├── models/
+│   │   └── simulation.py            ORM: sim_scenarios + sim_results
+│   ├── routers/
+│   │   ├── dma.py                   All DMA endpoints (zones/layers/simulate/leakage/nrw)
+│   │   ├── files.py                 GET /files (with layer validation)
+│   │   ├── simulation.py            GET /simulate/* (poll + results + GeoJSON)
+│   │   └── upload.py                POST /files/upload (.gpkg or .zip of shapefiles)
+│   ├── services/
+│   │   ├── dma_builder.py           Build EPANET .inp (multi-source, tanks, H-W by material)
+│   │   ├── dma_ingest.py            GPKG → typed asset dataclasses; multi-zone support
+│   │   ├── leakage_report.py        NRW / ILI / pressure zones / per-pipe risk scores
+│   │   ├── rpt_parser.py            Parse EPANET .rpt for real hydraulic flow balance
+│   │   ├── simulation_service.py    EPyT-Flow v0.17.x runner
+│   │   └── topology_repair.py       Shapely snap + T-split + MST connector insertion
+│   ├── workers/
+│   │   └── simulation_worker.py     Background: .inp → EPyT-Flow → DB → .rpt
+│   └── main.py
+├── data/
+│   ├── db/.gitkeep
+│   └── gpkg/
+│       └── DUWASA.gpkg              DMA dataset: dma+waterpipes+watersources+
+│                                    storagefacility+valves+bulk_meters
+├── frontend/
+│   └── dma_explorer.html            Full-featured DMA Leakage Explorer
+├── tests/
+│   ├── conftest.py                  Shared DB-init fixture
+│   ├── test_api.py                  Auth / files / upload / zones / result endpoints
+│   └── test_dma.py                  Full simulation lifecycle + topology repair unit tests
+├── pytest.ini
+├── Dockerfile                       Multi-stage Python 3.12 build
+├── docker-compose.yml
+├── requirements.txt
+└── .env.example
+
+API surface (all require X-API-Key header, except /health):
+─────────────────────────────────────────────────────────────
+GET    /health                                   Service health (no auth)
+GET    /files                                    List GPKG files + DMA layer check
+POST   /files/upload                             Upload a .gpkg or .zip of shapefiles
+GET    /dma/{file}/zones                         List DMA zones in file (multi-zone support)
+GET    /dma/{file}/layers[?zone_name=]           GeoJSON per asset type
+POST   /dma/{file}/simulate                      Build + run DMA simulation
+         body: name, zone_name, duration_hrs, time_step_min,
+               base_demand_m3h, leakage_frac, leak_reports[]
+GET    /dma/{file}/simulate/{id}/leakage         NRW + zones + risk + flow balance chart
+GET    /dma/{file}/simulate/{id}/nrw             NRW from real EPANET .rpt flow balance
+GET    /simulate                                 List scenarios
+GET    /simulate/{id}                            Poll status + summary
+GET    /simulate/{id}/nodes[?time_step=]         Node results (pressure, demand, age)
+GET    /simulate/{id}/pipes[?time_step=]         Pipe results (flow, velocity)
+GET    /simulate/{id}/alerts[?time_step=]        Low-pressure + high-velocity anomalies
+GET    /simulate/{id}/geojson/nodes              Leaflet-ready node GeoJSON
+GET    /simulate/{id}/geojson/pipes              Leaflet-ready pipe GeoJSON
+DELETE /simulate/{id}                            Delete scenario + all results
+
+DMA GeoPackage format (required layers):
+  dma              — DMA boundary polygon(s) — Name field used for zone selection
+  waterpipes       — intdiammm, material, length3dig, status
+  watersources     — ElevationM, YieldCapM3, HeadPatter, Status
+  storagefacility  — ElevationM, TankCapaci, TankDepthM, TankBaseEl, Status
+  valves           — ValveType, NomDiamMm, ElevationM, Status
+  bulk_meters      — Name (Inlet/Outlet), geometry
+
+Simulation workflow:
+  1. Upload GPKG  →  POST /files/upload
+  2. (Multi-zone) →  GET /dma/{file}/zones  → pick zone_name
+  3. Load map     →  GET /dma/{file}/layers?zone_name=X
+  4. Simulate     →  POST /dma/{file}/simulate  (with optional leak_reports[])
+  5. Poll         →  GET /simulate/{id}  until status=DONE
+  6. Leakage      →  GET /dma/{file}/simulate/{id}/leakage
+  7. NRW          →  GET /dma/{file}/simulate/{id}/nrw

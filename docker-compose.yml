@@ -1,0 +1,59 @@
+# docker-compose.yml
+# Usage:
+#   cp .env.example .env
+#   # edit .env (set API_KEYS, bind-mount your data path)
+#   docker compose up -d --build
+#   docker compose logs -f
+
+services:
+  dma_sim:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: duwasa/dma-sim:latest
+    container_name: dma_sim
+    restart: unless-stopped
+
+    ports:
+      - "8080:8080"
+
+    env_file:
+      - .env
+
+    volumes:
+      # ── GeoPackage data files ─────────────────────────────────────────────
+      # Place your DMA .gpkg files here.
+      # Example bind-mount (uncomment and set the host path):
+      # - /srv/duwasa/gpkg:/data/gpkg:ro
+      - gpkg_data:/data/gpkg
+
+      # ── SQLite simulation database ────────────────────────────────────────
+      - db_data:/data/db
+
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"
+      interval: 30s
+      timeout:  10s
+      retries:  3
+      start_period: 30s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  gpkg_data:
+    driver: local
+    # To bind-mount a host directory instead:
+    # driver_opts:
+    #   type: none
+    #   o: bind
+    #   device: /path/on/host
+  db_data:
+    driver: local
