@@ -7,8 +7,8 @@ This service is deployed as a Docker web service. It must be able to receive lau
 - Service type: Web Service
 - Runtime: Docker
 - Health check path: `/health`
-- Suggested service name: `majiscope-hydraulic-model`
-- Suggested public URL: `https://majiscope-hydraulic-model.onrender.com`
+- Service name: `epanet-model`
+- Public URL: `https://epanet-model.onrender.com`
 - Persistent disk:
   - Mount path: `/data`
   - Size: `1 GB` or larger
@@ -38,7 +38,7 @@ DEBUG=false
 After the hydraulic model Render URL is live, set this in the MajiScope backend Render service:
 
 ```env
-HYDRAULIC_MODEL_BASE_URL=https://majiscope-hydraulic-model.onrender.com
+HYDRAULIC_MODEL_BASE_URL=https://epanet-model.onrender.com
 ```
 
 The following backend variables must match the hydraulic model service:

@@ -15,9 +15,11 @@ Or as a FastAPI dependency:
 import logging
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncGenerator
 
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -34,19 +36,30 @@ class Base(DeclarativeBase):
     pass
 
 
+def ensure_storage_paths() -> None:
+    """Create runtime storage folders before SQLite or uploads use them.
+
+    Render persistent disks are mounted at runtime, so directories created
+    during the Docker build can be hidden by the mounted disk.
+    """
+    settings = get_settings()
+    os.makedirs(settings.gpkg_dir, exist_ok=True)
+
+    db_url = make_url(settings.database_url)
+    if db_url.drivername.startswith("sqlite") and db_url.database:
+        database_path = Path(db_url.database)
+        if database_path.parent:
+            database_path.parent.mkdir(parents=True, exist_ok=True)
+
+
 def _make_engine():
     settings = get_settings()
-    db_url   = settings.database_url
-
-    # ensure the directory exists
-    if db_url.startswith("sqlite"):
-        path = db_url.replace("sqlite+aiosqlite:////", "/")
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+    ensure_storage_paths()
 
     return create_async_engine(
-        db_url,
+        settings.database_url,
         echo=settings.debug,
-        connect_args={"check_same_thread": False} if "sqlite" in db_url else {},
+        connect_args={"check_same_thread": False} if "sqlite" in settings.database_url else {},
     )
 
 

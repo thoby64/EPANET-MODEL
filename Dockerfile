@@ -27,8 +27,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Unprivileged user
-RUN useradd -m -u 1000 appuser
 WORKDIR /app
 
 # Copy the built venv and application code
@@ -37,10 +35,7 @@ COPY app/ ./app/
 COPY frontend/ ./frontend/
 
 # Shared data directories (mounted from the host via volumes)
-RUN mkdir -p /data/gpkg /data/db \
-    && chown -R appuser:appuser /app /data
-
-USER appuser
+RUN mkdir -p /data/gpkg /data/db
 
 ENV PATH="/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \

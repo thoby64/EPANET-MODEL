@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
 from app.core.config import get_settings
-from app.core.database import init_db
+from app.core.database import ensure_storage_paths, init_db
 from app.routers import dma, files, majiscope, simulation, upload
 
 logging.basicConfig(
@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialise the database on startup."""
+    ensure_storage_paths()
     removed = majiscope.cleanup_expired_majiscope_files()
     if removed:
         logger.info("Cleaned %d expired MajiScope temporary hydraulic file(s)", removed)

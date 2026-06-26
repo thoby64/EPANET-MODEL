@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: majiscope-hydraulic-model
+    name: epanet-model
     env: docker
     plan: starter
     healthCheckPath: /health
