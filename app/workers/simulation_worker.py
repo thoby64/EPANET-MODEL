@@ -31,6 +31,17 @@ from app.services.simulation_service import run_simulation
 logger = logging.getLogger(__name__)
 
 
+def _execution_duration_seconds(scenario: SimScenario) -> float | None:
+    if not scenario.finished_at or not scenario.started_at:
+        return None
+    finished_at = scenario.finished_at
+    started_at = scenario.started_at
+    if (finished_at.tzinfo is None) != (started_at.tzinfo is None):
+        finished_at = finished_at.replace(tzinfo=None)
+        started_at = started_at.replace(tzinfo=None)
+    return max(0.0, (finished_at - started_at).total_seconds())
+
+
 def _majiscope_metadata_for_file(gpkg_filename: str) -> dict | None:
     if not gpkg_filename.startswith("majiscope_") or not gpkg_filename.endswith(".gpkg"):
         return None
@@ -131,6 +142,10 @@ async def _post_majiscope_snapshot(
             "warnings": merged_summary.get("warnings", []),
         },
         "hotspots_geojson": leakage_json.get("hotspots_geojson") if isinstance(leakage_json, dict) else None,
+        "completed_at": scenario.finished_at.isoformat() if scenario.finished_at else None,
+        "execution_duration_seconds": _execution_duration_seconds(scenario),
+        "snapshot_version": 1,
+        "result_quality": "complete" if merged_summary else "partial",
     }
     if not payload["utility_id"] or not payload["dma_id"]:
         logger.warning("[%s] MajiScope callback skipped: utility_id or dma_id missing in launch metadata", scenario.id)
@@ -151,6 +166,49 @@ async def _post_majiscope_snapshot(
             logger.info("[%s] MajiScope hydraulic snapshot saved", scenario.id)
     except Exception as exc:
         logger.warning("[%s] MajiScope callback failed: %s", scenario.id, exc)
+
+
+async def _post_majiscope_failed_snapshot(*, scenario: SimScenario, error_message: str) -> None:
+    settings = get_settings()
+    metadata = _majiscope_metadata_for_file(scenario.gpkg_filename)
+    if not metadata or not settings.majiscope_backend_url or not settings.majiscope_callback_secret:
+        return
+    payload = {
+        "launch_session_id": metadata.get("session_id"),
+        "utility_id": metadata.get("utility_id"),
+        "dma_id": metadata.get("dma_id"),
+        "hydraulic_scenario_id": str(scenario.id),
+        "scenario_name": scenario.name,
+        "scenario_status": "FAILED",
+        "input_parameters_json": {
+            "gpkg_filename": scenario.gpkg_filename,
+            "base_demand": scenario.base_demand,
+            "duration_hrs": scenario.duration_hrs,
+            "time_step_min": scenario.time_step_min,
+            "leakage_frac": scenario.leakage_frac,
+            "extra_demands": scenario.extra_demands,
+        },
+        "alerts_json": {"warnings": [error_message]},
+        "completed_at": scenario.finished_at.isoformat() if scenario.finished_at else None,
+        "execution_duration_seconds": _execution_duration_seconds(scenario),
+        "snapshot_version": 1,
+        "result_quality": "failed",
+        "error_message": error_message,
+    }
+    if not payload["utility_id"] or not payload["dma_id"]:
+        return
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                settings.majiscope_backend_url.rstrip("/") + "/api/hydraulic-model/snapshots",
+                json=payload,
+                headers={"X-MajiScope-Hydraulic-Secret": settings.majiscope_callback_secret},
+            )
+        if response.status_code >= 400:
+            logger.warning("[%s] MajiScope failed-run callback rejected: %s %s", scenario.id, response.status_code, response.text)
+    except Exception as exc:
+        logger.warning("[%s] MajiScope failed-run callback failed: %s", scenario.id, exc)
 
 
 # ── coordinate helpers ────────────────────────────────────────────────────────
@@ -346,5 +404,6 @@ async def run_simulation_task(scenario_id: int) -> None:
                     scenario.error_message = str(exc)
                     scenario.finished_at   = datetime.now(timezone.utc)
                     await session.commit()
+                    await _post_majiscope_failed_snapshot(scenario=scenario, error_message=str(exc))
             except Exception:
                 pass
