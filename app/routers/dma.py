@@ -33,7 +33,7 @@ from app.models.simulation import SimResult, SimScenario
 from app.services.dma_builder import build_dma_inp, estimate_nrw
 from app.services.dma_ingest import ingest_dma, list_dma_zones
 from app.services.leakage_report import analyse_leakage
-from app.workers.simulation_worker import run_simulation_task
+from app.workers.simulation_worker import _majiscope_metadata_for_file, run_simulation_task
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -266,6 +266,7 @@ async def simulate_dma(
         ],
     }
 
+    majiscope_metadata = _majiscope_metadata_for_file(filename)
     scenario = SimScenario(
         gpkg_filename = filename,
         name          = body.name,
@@ -287,6 +288,7 @@ async def simulate_dma(
             "_leak_reports": [
                 lr.model_dump() for lr in body.leak_reports
             ] if body.leak_reports else [],
+            "_majiscope": majiscope_metadata,
         },
         status = "PENDING",
     )

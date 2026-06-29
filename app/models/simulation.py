@@ -51,6 +51,13 @@ class SimScenario(Base):
     # summary JSON written at completion (includes epanet_flow_balance from .rpt)
     summary: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
+    # Durable MajiScope snapshot outbox.
+    majiscope_snapshot_payload: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    majiscope_snapshot_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    majiscope_snapshot_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    majiscope_snapshot_last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    majiscope_snapshot_delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
     results: Mapped[list["SimResult"]] = relationship(
         "SimResult", back_populates="scenario", cascade="all, delete-orphan"
     )

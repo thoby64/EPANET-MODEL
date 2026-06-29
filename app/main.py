@@ -6,8 +6,9 @@ Start with:
     uvicorn app.main:app --host 0.0.0.0 --port 8080
 """
 
+import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -25,6 +26,18 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def _snapshot_delivery_loop() -> None:
+    from app.workers.simulation_worker import retry_pending_majiscope_snapshots
+    while True:
+        try:
+            delivered = await retry_pending_majiscope_snapshots()
+            if delivered:
+                logger.info("Delivered %d pending MajiScope hydraulic snapshot(s)", delivered)
+        except Exception:
+            logger.exception("Pending MajiScope snapshot delivery check failed")
+        await asyncio.sleep(300)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialise the database on startup."""
@@ -35,7 +48,11 @@ async def lifespan(app: FastAPI):
     logger.info("Initialising database …")
     await init_db()
     logger.info("Database ready.")
+    snapshot_delivery_task = asyncio.create_task(_snapshot_delivery_loop())
     yield
+    snapshot_delivery_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await snapshot_delivery_task
     logger.info("Shutting down.")
 
 

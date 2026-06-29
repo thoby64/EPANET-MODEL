@@ -20,6 +20,7 @@ import os
 import re
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
+from sqlalchemy import select
 
 from app.core.database import get_session
 from app.core.config import get_settings
@@ -42,6 +43,21 @@ def _execution_duration_seconds(scenario: SimScenario) -> float | None:
     return max(0.0, (finished_at - started_at).total_seconds())
 
 
+def _public_hydraulic_snapshot_value(value):
+    """Remove engine-specific EPANET naming from the MajiScope snapshot contract."""
+    if isinstance(value, dict):
+        return {
+            str(key).replace("EPANET", "HYDRAULIC").replace("Epanet", "Hydraulic").replace("epanet", "hydraulic"):
+            _public_hydraulic_snapshot_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_public_hydraulic_snapshot_value(item) for item in value]
+    if isinstance(value, str):
+        return value.replace("EPANET", "HYDRAULIC").replace("Epanet", "Hydraulic").replace("epanet", "hydraulic")
+    return value
+
+
 def _majiscope_metadata_for_file(gpkg_filename: str) -> dict | None:
     if not gpkg_filename.startswith("majiscope_") or not gpkg_filename.endswith(".gpkg"):
         return None
@@ -58,18 +74,74 @@ def _majiscope_metadata_for_file(gpkg_filename: str) -> dict | None:
         return None
 
 
+def _majiscope_metadata_for_scenario(scenario: SimScenario) -> dict | None:
+    embedded = (scenario.extra_demands or {}).get("_majiscope")
+    if isinstance(embedded, dict) and embedded.get("session_id"):
+        return embedded
+    return _majiscope_metadata_for_file(scenario.gpkg_filename)
+
+
+async def _deliver_majiscope_payload(*, scenario: SimScenario, session) -> bool:
+    settings = get_settings()
+    payload = scenario.majiscope_snapshot_payload
+    if not payload:
+        return False
+    scenario.majiscope_snapshot_attempts = (scenario.majiscope_snapshot_attempts or 0) + 1
+    if not settings.majiscope_backend_url or not settings.majiscope_callback_secret:
+        scenario.majiscope_snapshot_status = "PENDING"
+        scenario.majiscope_snapshot_last_error = "MajiScope callback configuration is incomplete"
+        await session.commit()
+        return False
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                settings.majiscope_backend_url.rstrip("/") + "/api/hydraulic-model/snapshots",
+                json=payload,
+                headers={"X-MajiScope-Hydraulic-Secret": settings.majiscope_callback_secret},
+            )
+        if response.status_code >= 400:
+            raise RuntimeError(f"MajiScope returned HTTP {response.status_code}: {response.text[:500]}")
+        scenario.majiscope_snapshot_status = "DELIVERED"
+        scenario.majiscope_snapshot_last_error = None
+        scenario.majiscope_snapshot_delivered_at = datetime.now(timezone.utc)
+        await session.commit()
+        logger.info("[%s] MajiScope hydraulic snapshot delivered", scenario.id)
+        return True
+    except Exception as exc:
+        scenario.majiscope_snapshot_status = "RETRY"
+        scenario.majiscope_snapshot_last_error = str(exc)[:2000]
+        await session.commit()
+        logger.warning("[%s] MajiScope snapshot delivery deferred: %s", scenario.id, exc)
+        return False
+
+
+async def retry_pending_majiscope_snapshots() -> int:
+    delivered = 0
+    async with get_session() as session:
+        rows = (await session.execute(
+            select(SimScenario).where(
+                SimScenario.majiscope_snapshot_payload.is_not(None),
+                SimScenario.majiscope_snapshot_status != "DELIVERED",
+                SimScenario.majiscope_snapshot_attempts < 100,
+            ).order_by(SimScenario.finished_at.asc()).limit(25)
+        )).scalars().all()
+        for scenario in rows:
+            if await _deliver_majiscope_payload(scenario=scenario, session=session):
+                delivered += 1
+    return delivered
+
+
 async def _post_majiscope_snapshot(
     *,
     scenario: SimScenario,
     output,
     merged_summary: dict,
+    session,
 ) -> None:
     settings = get_settings()
-    metadata = _majiscope_metadata_for_file(scenario.gpkg_filename)
+    metadata = _majiscope_metadata_for_scenario(scenario)
     if not metadata:
-        return
-    if not settings.majiscope_backend_url or not settings.majiscope_callback_secret:
-        logger.warning("[%s] MajiScope callback skipped: backend URL or callback secret is not configured", scenario.id)
         return
 
     try:
@@ -133,10 +205,10 @@ async def _post_majiscope_snapshot(
             "duration_hrs": scenario.duration_hrs,
             "time_step_min": scenario.time_step_min,
             "leakage_frac": scenario.leakage_frac,
-            "extra_demands": scenario.extra_demands,
+            "extra_demands": {key: value for key, value in (scenario.extra_demands or {}).items() if key != "_majiscope"},
         },
-        "summary_json": merged_summary,
-        "nrw_json": merged_summary.get("epanet_flow_balance"),
+        "summary_json": _public_hydraulic_snapshot_value(merged_summary),
+        "nrw_json": _public_hydraulic_snapshot_value(merged_summary.get("epanet_flow_balance")),
         "leakage_json": leakage_json,
         "alerts_json": {
             "warnings": merged_summary.get("warnings", []),
@@ -147,31 +219,22 @@ async def _post_majiscope_snapshot(
         "snapshot_version": 1,
         "result_quality": "complete" if merged_summary else "partial",
     }
+    payload = _public_hydraulic_snapshot_value(payload)
     if not payload["utility_id"] or not payload["dma_id"]:
         logger.warning("[%s] MajiScope callback skipped: utility_id or dma_id missing in launch metadata", scenario.id)
         return
 
-    try:
-        import httpx
-
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                settings.majiscope_backend_url.rstrip("/") + "/api/hydraulic-model/snapshots",
-                json=payload,
-                headers={"X-MajiScope-Hydraulic-Secret": settings.majiscope_callback_secret},
-            )
-        if response.status_code >= 400:
-            logger.warning("[%s] MajiScope callback failed: %s %s", scenario.id, response.status_code, response.text)
-        else:
-            logger.info("[%s] MajiScope hydraulic snapshot saved", scenario.id)
-    except Exception as exc:
-        logger.warning("[%s] MajiScope callback failed: %s", scenario.id, exc)
+    scenario.majiscope_snapshot_payload = payload
+    scenario.majiscope_snapshot_status = "PENDING"
+    scenario.majiscope_snapshot_last_error = None
+    await session.commit()
+    await _deliver_majiscope_payload(scenario=scenario, session=session)
 
 
-async def _post_majiscope_failed_snapshot(*, scenario: SimScenario, error_message: str) -> None:
+async def _post_majiscope_failed_snapshot(*, scenario: SimScenario, error_message: str, session) -> None:
     settings = get_settings()
-    metadata = _majiscope_metadata_for_file(scenario.gpkg_filename)
-    if not metadata or not settings.majiscope_backend_url or not settings.majiscope_callback_secret:
+    metadata = _majiscope_metadata_for_scenario(scenario)
+    if not metadata:
         return
     payload = {
         "launch_session_id": metadata.get("session_id"),
@@ -186,7 +249,7 @@ async def _post_majiscope_failed_snapshot(*, scenario: SimScenario, error_messag
             "duration_hrs": scenario.duration_hrs,
             "time_step_min": scenario.time_step_min,
             "leakage_frac": scenario.leakage_frac,
-            "extra_demands": scenario.extra_demands,
+            "extra_demands": {key: value for key, value in (scenario.extra_demands or {}).items() if key != "_majiscope"},
         },
         "alerts_json": {"warnings": [error_message]},
         "completed_at": scenario.finished_at.isoformat() if scenario.finished_at else None,
@@ -195,20 +258,14 @@ async def _post_majiscope_failed_snapshot(*, scenario: SimScenario, error_messag
         "result_quality": "failed",
         "error_message": error_message,
     }
+    payload = _public_hydraulic_snapshot_value(payload)
     if not payload["utility_id"] or not payload["dma_id"]:
         return
-    try:
-        import httpx
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                settings.majiscope_backend_url.rstrip("/") + "/api/hydraulic-model/snapshots",
-                json=payload,
-                headers={"X-MajiScope-Hydraulic-Secret": settings.majiscope_callback_secret},
-            )
-        if response.status_code >= 400:
-            logger.warning("[%s] MajiScope failed-run callback rejected: %s %s", scenario.id, response.status_code, response.text)
-    except Exception as exc:
-        logger.warning("[%s] MajiScope failed-run callback failed: %s", scenario.id, exc)
+    scenario.majiscope_snapshot_payload = payload
+    scenario.majiscope_snapshot_status = "PENDING"
+    scenario.majiscope_snapshot_last_error = None
+    await session.commit()
+    await _deliver_majiscope_payload(scenario=scenario, session=session)
 
 
 # ── coordinate helpers ────────────────────────────────────────────────────────
@@ -388,6 +445,7 @@ async def run_simulation_task(scenario_id: int) -> None:
                 scenario=scenario,
                 output=output,
                 merged_summary=merged_summary,
+                session=session,
             )
 
             logger.info(
@@ -404,6 +462,6 @@ async def run_simulation_task(scenario_id: int) -> None:
                     scenario.error_message = str(exc)
                     scenario.finished_at   = datetime.now(timezone.utc)
                     await session.commit()
-                    await _post_majiscope_failed_snapshot(scenario=scenario, error_message=str(exc))
+                    await _post_majiscope_failed_snapshot(scenario=scenario, error_message=str(exc), session=session)
             except Exception:
                 pass

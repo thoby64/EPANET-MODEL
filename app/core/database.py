@@ -85,6 +85,11 @@ async def _ensure_sim_scenarios_columns(conn) -> None:
     # leakage_frac was added when the DMA workflow replaced the whole-network one
     additions = {
         "leakage_frac": "FLOAT DEFAULT 0.20",
+        "majiscope_snapshot_payload": "JSON",
+        "majiscope_snapshot_status": "VARCHAR(20)",
+        "majiscope_snapshot_attempts": "INTEGER DEFAULT 0",
+        "majiscope_snapshot_last_error": "TEXT",
+        "majiscope_snapshot_delivered_at": "DATETIME",
     }
     for column, coltype in additions.items():
         if column not in existing:
