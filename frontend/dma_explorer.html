@@ -13,15 +13,29 @@
   --cyan:#3fc7d6;--cyan2:#1d5f68;--amber:#e09c35;--amber2:#5a3f18;
   --red:#e05248;--red2:#5a201c;--green:#4dbf82;--green2:#1a4a32;
   --purple:#8b7ff5;--blue:#5aaddf;
+  --map-bg:#080e12;--map-overlay:rgba(17,26,31,.94);--legend-bg:rgba(11,18,21,.94);
   --mono:'JetBrains Mono',monospace;--sans:'Inter',system-ui,sans-serif;
 }
+html[data-theme="light"]{
+  --bg:#eef2f7;--panel:#ffffff;--panel2:#f8fafc;--border:#d9e2ec;--border2:#c7d2df;
+  --text:#0f172a;--dim:#52657d;--faint:#7b8da3;
+  --cyan:#0891b2;--cyan2:#dff5fa;--amber:#c56a08;--amber2:#fff1d6;
+  --red:#dc2626;--red2:#fee2e2;--green:#059669;--green2:#d1fae5;
+  --purple:#7c3aed;--blue:#2563eb;
+  --map-bg:#e8eef4;--map-overlay:rgba(255,255,255,.96);--legend-bg:rgba(255,255,255,.96);
+}
+html[data-theme="light"] .btn.primary{color:#0c4a6e}
+html[data-theme="light"] .btn.primary:hover:not(:disabled){color:#ffffff}
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13px}
 #app{display:flex;height:100vh;overflow:hidden}
-#sidebar{width:400px;min-width:400px;display:flex;flex-direction:column;background:var(--panel);border-right:1px solid var(--border);overflow:hidden}
+#sidebar{width:380px;min-width:380px;display:flex;flex-direction:column;background:var(--panel);border-right:1px solid var(--border);overflow:hidden}
 #sidebar-header{padding:14px 18px 12px;border-bottom:1px solid var(--border);flex:none}
 #sidebar-header h1{font-size:13px;font-weight:700;letter-spacing:.05em;color:var(--text)}
 #sidebar-header p{font-size:10px;color:var(--dim);margin-top:3px;font-family:var(--mono)}
+.header-title-row{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.theme-toggle{flex:none;border:1px solid var(--border2);background:var(--panel2);color:var(--dim);border-radius:6px;padding:5px 8px;font-size:9px;font-weight:700;cursor:pointer;text-transform:uppercase}
+.theme-toggle:hover{border-color:var(--cyan);color:var(--cyan)}
 .conn-row{display:flex;align-items:center;gap:6px;margin-top:4px}
 .dot{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:none}
 .dot.on{background:var(--green)}.dot.off{background:var(--red)}
@@ -36,11 +50,11 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--s
 .tab-pane{display:none}.tab-pane.active{display:block}
 .field{margin-bottom:10px}
 .field label{display:block;font-size:10px;font-family:var(--mono);color:var(--dim);letter-spacing:.04em;margin-bottom:4px}
-.field input,.field select,.field textarea{width:100%;background:var(--bg);border:1px solid var(--border2);color:var(--text);padding:6px 8px;font-size:12px;font-family:var(--mono);border-radius:2px;outline:none}
+.field input,.field select,.field textarea{width:100%;background:var(--bg);border:1px solid var(--border2);color:var(--text);padding:7px 9px;font-size:12px;font-family:var(--mono);border-radius:6px;outline:none}
 .field input:focus,.field select:focus,.field textarea:focus{border-color:var(--cyan)}
 .field textarea{resize:vertical;min-height:60px}
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.btn{background:var(--panel2);border:1px solid var(--border2);color:var(--text);padding:7px 12px;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;border-radius:2px;cursor:pointer;transition:all .15s;width:100%;margin-top:8px}
+.btn{background:var(--panel2);border:1px solid var(--border2);color:var(--text);padding:8px 12px;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;border-radius:6px;cursor:pointer;transition:all .15s;width:100%;margin-top:8px}
 .btn:hover:not(:disabled){border-color:var(--cyan);color:var(--cyan)}
 .btn:disabled{opacity:.35;cursor:not-allowed}
 .btn.primary{background:var(--cyan2);border-color:var(--cyan);color:#dff7fa}
@@ -92,23 +106,32 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--s
 .leak-del:hover{color:var(--red)}
 #upload-drop{border:2px dashed var(--border2);border-radius:3px;padding:18px;text-align:center;color:var(--faint);font-size:11px;cursor:pointer;transition:all .2s;margin-bottom:8px}
 #upload-drop:hover,#upload-drop.over{border-color:var(--cyan);color:var(--cyan);background:rgba(63,199,214,.04)}
-#map{flex:1;background:#080e12;position:relative}
-.leaflet-container{background:#080e12}
+#map{flex:1;background:var(--map-bg);position:relative}
+.leaflet-container{background:var(--map-bg)}
 .leaflet-control-zoom a{background:var(--panel)!important;color:var(--text)!important;border-color:var(--border)!important}
 .leaflet-control-zoom a:hover{background:var(--panel2)!important;color:var(--cyan)!important}
 #map-toolbar{position:absolute;top:12px;left:12px;z-index:900;display:flex;gap:6px;flex-wrap:wrap}
-.mbtool{background:rgba(17,26,31,.92);border:1px solid var(--border);color:var(--dim);padding:6px 10px;font-size:9.5px;font-family:var(--mono);letter-spacing:.04em;cursor:pointer;border-radius:2px}
+.mbtool{background:var(--map-overlay);border:1px solid var(--border);color:var(--dim);padding:6px 10px;font-size:9.5px;font-family:var(--mono);letter-spacing:.04em;cursor:pointer;border-radius:6px}
 .mbtool.active,.mbtool:hover{border-color:var(--cyan);color:var(--cyan)}
 .mbtool.leak-mode{border-color:var(--red);color:var(--red)}
-#map-legend{position:absolute;bottom:14px;left:14px;z-index:900;background:rgba(11,18,21,.93);border:1px solid var(--border);padding:8px 10px;border-radius:2px;display:none}
+#map-legend{position:absolute;bottom:14px;left:14px;z-index:900;background:var(--legend-bg);border:1px solid var(--border);padding:8px 10px;border-radius:6px;display:none}
 .leg-row{display:flex;align-items:center;gap:7px;font-size:9.5px;color:var(--dim);margin:2px 0}
 .leg-dot{width:10px;height:10px;border-radius:50%;flex:none}
 .leg-line{width:16px;height:3px;flex:none}
-.tip{background:rgba(11,18,21,.95);border:1px solid var(--border2);padding:6px 9px;border-radius:2px;font-size:10.5px;font-family:var(--mono);color:var(--text);pointer-events:none}
+.tip{background:var(--legend-bg);border:1px solid var(--border2);padding:6px 9px;border-radius:6px;font-size:10.5px;font-family:var(--mono);color:var(--text);pointer-events:none}
 .zone-btn{width:100%;background:var(--bg);border:1px solid var(--border2);color:var(--dim);padding:7px 10px;border-radius:2px;text-align:left;cursor:pointer;font-size:11px;font-family:var(--mono);display:flex;align-items:center;gap:8px;margin-bottom:5px;transition:all .15s}
 .zone-btn:hover,.zone-btn.sel{border-color:var(--cyan);color:var(--text)}
 .zone-btn.sel{background:rgba(63,199,214,.06)}
 .zone-name{flex:1}.zone-badge{font-size:9px;color:var(--cyan);font-weight:700}
+#integrated-overview{display:none}
+.overview-card{border:1px solid var(--border);background:var(--panel2);border-radius:6px;padding:12px;margin-bottom:10px}
+.overview-card strong{display:block;color:var(--text);font-size:12px;margin-bottom:4px}
+.overview-card span{color:var(--dim);font-size:10.5px}
+body.integrated-mode #integrated-overview{display:block}
+body.integrated-mode #connect-ok{display:none!important}
+body.integrated-mode #theme-toggle{display:none}
+body.integrated-mode #sidebar-header{background:var(--panel2)}
+@media(max-width:900px){#sidebar{width:340px;min-width:340px}}
 </style>
 </head>
 <body>
@@ -116,8 +139,13 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--s
 
 <aside id="sidebar">
   <div id="sidebar-header">
-    <h1 id="sidebar-title">DUWASA — DMA LEAKAGE EXPLORER</h1>
-    <p>Hydraulic Simulation &amp; NRW Analysis</p>
+    <div class="header-title-row">
+      <div>
+        <h1 id="sidebar-title">DUWASA — DMA LEAKAGE EXPLORER</h1>
+        <p id="sidebar-subtitle">Hydraulic Simulation &amp; NRW Analysis</p>
+      </div>
+      <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Switch color theme">Light</button>
+    </div>
     <div class="conn-row"><div class="dot" id="cdot"></div><span id="conn-text">disconnected</span></div>
   </div>
 
@@ -135,7 +163,13 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--s
       <div class="field"><label>SERVICE URL</label><input id="api-base" value="http://localhost:8080"/></div>
       <div class="field"><label>API KEY</label><input id="api-key" type="password" placeholder="X-API-Key"/></div>
       <button class="btn primary" id="btn-connect">Connect</button>
-      <button class="btn" id="btn-back-majiscope" style="display:none">Back to MajiScope</button>
+      <div id="integrated-overview">
+        <div class="overview-card">
+          <strong>Prepared model data</strong>
+          <span>The selected DMA infrastructure is loaded for this secure model session.</span>
+        </div>
+      </div>
+      <button class="btn" id="btn-back-majiscope" style="display:none">Return to Dashboard</button>
       <div id="err-connect"></div>
 
       <div id="connect-ok" style="display:none">
@@ -257,13 +291,28 @@ const S={
   base:"http://localhost:8080",key:"",file:null,zoneName:null,
   scenarioId:null,pollTimer:null,leakMode:false,leakReports:[],
   integrated:false,sessionId:null,launchToken:null,returnUrl:"http://localhost:3000/dashboard",
+  theme:"dark",
 };
 
 // ── map ────────────────────────────────────────────────────────────────────
 const map=L.map("map",{preferCanvas:true,zoomControl:false}).setView([-6.13,35.84],14);
 L.control.zoom({position:"topright"}).addTo(map);
-L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",{
-  attribution:"&copy; OSM &copy; CARTO",maxZoom:20,subdomains:"abcd"}).addTo(map);
+let baseMapLayer=null;
+function applyTheme(value){
+  const theme=value==="light"?"light":"dark";
+  S.theme=theme;
+  document.documentElement.dataset.theme=theme;
+  try{localStorage.setItem("hydraulic-workspace-theme",theme);}catch(e){}
+  if(baseMapLayer) map.removeLayer(baseMapLayer);
+  const tileStyle=theme==="light"?"light_all":"dark_all";
+  baseMapLayer=L.tileLayer(`https://{s}.basemaps.cartocdn.com/${tileStyle}/{z}/{x}/{y}{r}.png`,{
+    attribution:"&copy; OSM &copy; CARTO",maxZoom:20,subdomains:"abcd"}).addTo(map);
+  baseMapLayer.bringToBack();
+  const toggle=document.getElementById("theme-toggle");
+  if(toggle) toggle.textContent=theme==="dark"?"Light":"Dark";
+}
+const initialParams=new URLSearchParams(window.location.search);
+applyTheme(initialParams.get("theme")||localStorage.getItem("hydraulic-workspace-theme")||"dark");
 
 const LG={
   boundary:L.layerGroup().addTo(map),pipes:L.layerGroup().addTo(map),
@@ -307,18 +356,18 @@ function initIntegratedLaunch(){
   if(!launchToken||!sessionId||!file) return;
 
   S.integrated=true;
+  document.body.classList.add("integrated-mode");
   S.launchToken=launchToken;
   S.sessionId=sessionId;
   S.file=file;
   S.base=window.location.origin;
   if(returnUrl) S.returnUrl=returnUrl;
 
-  if(utilityName||dmaName){
-    const utilityLabel=(utilityName||"Utility").trim();
-    const dmaLabel=(dmaName||"Selected DMA").trim();
-    $("sidebar-title").textContent=`${utilityLabel} — ${dmaLabel}`;
-  }
-  $("tab-connect-label").textContent="MAJISCOPE";
+  const utilityLabel=(utilityName||"Utility").trim();
+  const dmaLabel=(dmaName||"Selected DMA").trim();
+  $("sidebar-title").textContent="HYDRAULIC MODEL WORKSPACE";
+  $("sidebar-subtitle").textContent=`${utilityLabel} · ${dmaLabel}`;
+  $("tab-connect-label").textContent="OVERVIEW";
   $("api-base").value=S.base;
   $("api-key").value="";
   $("api-base").closest(".field").style.display="none";
@@ -331,14 +380,20 @@ function initIntegratedLaunch(){
     try{
       await api(`/majiscope/cleanup/${encodeURIComponent(S.sessionId)}`,{method:"POST"});
     }catch(e){}
-    window.location.href=S.returnUrl;
+    if(window.parent!==window){
+      let targetOrigin="*";
+      try{targetOrigin=new URL(S.returnUrl).origin;}catch(e){}
+      window.parent.postMessage({type:"hydraulic:return"},targetOrigin);
+    }else{
+      window.location.href=S.returnUrl;
+    }
   });
 
   setTimeout(async()=>{
     try{
       const h=await fetch(S.base.replace(/\/$/,"")+"/health");
       if(!h.ok) throw new Error("Service unreachable");
-      $("cdot").className="dot on"; $("conn-text").textContent="connected from MajiScope";
+      $("cdot").className="dot on"; $("conn-text").textContent="secure model session active";
       await loadFiles(file);
       $("connect-ok").style.display="block";
       await loadZones();
@@ -349,6 +404,14 @@ function initIntegratedLaunch(){
     }
   },0);
 }
+
+$("theme-toggle").addEventListener("click",()=>applyTheme(S.theme==="dark"?"light":"dark"));
+window.addEventListener("message",event=>{
+  if(event.source!==window.parent) return;
+  if(event.data?.type!=="majiscope:theme") return;
+  if(event.data.theme!=="light"&&event.data.theme!=="dark") return;
+  applyTheme(event.data.theme);
+});
 
 // ── CONNECT ────────────────────────────────────────────────────────────────
 $("btn-connect").addEventListener("click",async()=>{

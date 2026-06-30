@@ -1,0 +1,25 @@
+{
+  "session_id": "7c564161-ed1e-4811-b63e-6168d37eb478",
+  "filename": "majiscope_7c564161-ed1e-4811-b63e-6168d37eb478.gpkg",
+  "utility_id": "d15ef11e-0aee-489d-95c7-67c3223aa90c",
+  "dma_id": "94dde829-6ace-4cca-a39b-69abbd94588d",
+  "dma_name": "Nzuguni DMA",
+  "launch_token_hash": "ac1889b92357b44651500309d39fd5de4f1e5a26c761062a7258111299561f5d",
+  "expires_at": "2026-07-01T09:12:42.148486",
+  "layers": [
+    "dma",
+    "waterpipes",
+    "watersources",
+    "storagefacility",
+    "valves",
+    "bulk_meters"
+  ],
+  "feature_counts": {
+    "dma": 1,
+    "waterpipes": 206,
+    "watersources": 6,
+    "storagefacility": 4,
+    "valves": 26,
+    "bulk_meters": 2
+  }
+}
