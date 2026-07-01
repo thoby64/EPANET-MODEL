@@ -81,6 +81,30 @@ def _majiscope_metadata_for_scenario(scenario: SimScenario) -> dict | None:
     return _majiscope_metadata_for_file(scenario.gpkg_filename)
 
 
+def _build_pressure_time_series(output) -> list[dict]:
+    """Return compact, graph-ready pressure aggregates for each model timestep."""
+    grouped: Dict[float, list] = {}
+    for row in output.node_results:
+        if row.pressure is None:
+            continue
+        grouped.setdefault(float(row.time_step), []).append(row)
+
+    series = []
+    for time_step in sorted(grouped):
+        rows = grouped[time_step]
+        pressures = [float(row.pressure) for row in rows]
+        series.append({
+            "hour": round(time_step, 4),
+            "pressure_min_m": round(min(pressures), 3),
+            "pressure_avg_m": round(sum(pressures) / len(pressures), 3),
+            "pressure_max_m": round(max(pressures), 3),
+            "low_pressure_nodes": sum(1 for row in rows if row.is_low_pressure),
+            "critical_pressure_nodes": sum(1 for pressure in pressures if pressure < 5),
+            "node_count": len(rows),
+        })
+    return series
+
+
 async def _deliver_majiscope_payload(*, scenario: SimScenario, session) -> bool:
     settings = get_settings()
     payload = scenario.majiscope_snapshot_payload
@@ -192,6 +216,16 @@ async def _post_majiscope_snapshot(
         logger.warning("[%s] MajiScope leakage snapshot enrichment failed: %s", scenario.id, exc)
         leakage_json = None
 
+    nodes_geojson, pipes_geojson, heat_modes = _build_snapshot_heat_sources(
+        output=output,
+        leakage_json=leakage_json,
+    )
+    pressure_time_series = _build_pressure_time_series(output)
+    if heat_modes:
+        merged_summary["heat_map_modes"] = heat_modes
+    if pressure_time_series:
+        merged_summary["pressure_time_series"] = pressure_time_series
+
     payload = {
         "launch_session_id": metadata.get("session_id"),
         "utility_id": metadata.get("utility_id"),
@@ -213,10 +247,12 @@ async def _post_majiscope_snapshot(
         "alerts_json": {
             "warnings": merged_summary.get("warnings", []),
         },
+        "nodes_geojson": nodes_geojson,
+        "pipes_geojson": pipes_geojson,
         "hotspots_geojson": leakage_json.get("hotspots_geojson") if isinstance(leakage_json, dict) else None,
         "completed_at": scenario.finished_at.isoformat() if scenario.finished_at else None,
         "execution_duration_seconds": _execution_duration_seconds(scenario),
-        "snapshot_version": 1,
+        "snapshot_version": 3,
         "result_quality": "complete" if merged_summary else "partial",
     }
     payload = _public_hydraulic_snapshot_value(payload)
@@ -254,7 +290,7 @@ async def _post_majiscope_failed_snapshot(*, scenario: SimScenario, error_messag
         "alerts_json": {"warnings": [error_message]},
         "completed_at": scenario.finished_at.isoformat() if scenario.finished_at else None,
         "execution_duration_seconds": _execution_duration_seconds(scenario),
-        "snapshot_version": 1,
+        "snapshot_version": 3,
         "result_quality": "failed",
         "error_message": error_message,
     }
@@ -266,6 +302,104 @@ async def _post_majiscope_failed_snapshot(*, scenario: SimScenario, error_messag
     scenario.majiscope_snapshot_last_error = None
     await session.commit()
     await _deliver_majiscope_payload(scenario=scenario, session=session)
+
+
+def _build_snapshot_heat_sources(*, output, leakage_json: Optional[dict]) -> tuple[dict, dict, list[str]]:
+    node_index: Dict[str, dict] = {}
+    for row in output.node_results:
+        if row.lat is None or row.lon is None:
+            continue
+        entry = node_index.setdefault(
+            row.element_id,
+            {
+                "lat": row.lat,
+                "lon": row.lon,
+                "pressures": [],
+                "low_pressure_hits": 0,
+                "total_steps": 0,
+            },
+        )
+        if row.pressure is not None:
+            entry["pressures"].append(float(row.pressure))
+        entry["total_steps"] += 1
+        if row.is_low_pressure:
+            entry["low_pressure_hits"] += 1
+
+    node_features = []
+    low_pressure_available = False
+    for element_id, entry in node_index.items():
+        pressures = entry["pressures"]
+        if not pressures:
+            continue
+        low_hits = int(entry["low_pressure_hits"])
+        low_pressure_available = low_pressure_available or low_hits > 0
+        total_steps = max(1, int(entry["total_steps"]))
+        node_features.append({
+            "type": "Feature",
+            "geometry": {
+                "type": "Point",
+                "coordinates": [entry["lon"], entry["lat"]],
+            },
+            "properties": {
+                "element_id": element_id,
+                "pressure": round(min(pressures), 3),
+                "pressure_min": round(min(pressures), 3),
+                "pressure_avg": round(sum(pressures) / len(pressures), 3),
+                "pressure_max": round(max(pressures), 3),
+                "low_pressure_hits": low_hits,
+                "low_pressure_ratio": round(low_hits / total_steps, 4),
+                "is_low_pressure": low_hits > 0,
+            },
+        })
+
+    pipe_index: Dict[str, dict] = {}
+    for row in output.pipe_results:
+        if row.lat is None or row.lon is None:
+            continue
+        entry = pipe_index.setdefault(
+            row.element_id,
+            {
+                "lat": row.lat,
+                "lon": row.lon,
+                "flows": [],
+            },
+        )
+        if row.flow_rate is not None:
+            entry["flows"].append(float(row.flow_rate))
+
+    pipe_features = []
+    for element_id, entry in pipe_index.items():
+        flows = entry["flows"]
+        if not flows:
+            continue
+        pipe_features.append({
+            "type": "Feature",
+            "geometry": {
+                "type": "Point",
+                "coordinates": [entry["lon"], entry["lat"]],
+            },
+            "properties": {
+                "element_id": element_id,
+                "flow_rate": round(max(flows, key=lambda value: abs(value)), 6),
+                "flow_rate_avg": round(sum(flows) / len(flows), 6),
+                "flow_rate_max_abs": round(max(abs(value) for value in flows), 6),
+            },
+        })
+
+    heat_modes: list[str] = []
+    if node_features:
+        heat_modes.append("pressure")
+    if low_pressure_available:
+        heat_modes.append("low_pressure")
+    hotspot_features = ((leakage_json or {}).get("hotspots_geojson") or {}).get("features") or []
+    if hotspot_features:
+        heat_modes.append("leakage_risk")
+
+    return (
+        {"type": "FeatureCollection", "features": node_features},
+        {"type": "FeatureCollection", "features": pipe_features},
+        heat_modes,
+    )
 
 
 # ── coordinate helpers ────────────────────────────────────────────────────────

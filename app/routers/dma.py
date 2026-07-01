@@ -20,13 +20,16 @@ GET  /dma/{filename}/simulate/{id}/nrw
                                        junction demands.
 """
 
+import json
 import logging
+import os
 from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.core.auth import require_api_key
+from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.exceptions import GpkgNotFoundError, InvalidGpkgError
 from app.models.simulation import SimResult, SimScenario
@@ -39,6 +42,36 @@ from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/dma", tags=["dma"])
+
+
+def _load_optional_layer_geojson(filename: str, layer_name: str) -> dict:
+    try:
+        import geopandas as gpd
+    except ImportError:
+        return {"type": "FeatureCollection", "features": []}
+
+    settings = get_settings()
+    gpkg_path = os.path.join(settings.gpkg_dir, filename)
+    if not os.path.isfile(gpkg_path):
+        return {"type": "FeatureCollection", "features": []}
+
+    try:
+        gdf = gpd.read_file(gpkg_path, layer=layer_name)
+    except Exception:
+        return {"type": "FeatureCollection", "features": []}
+
+    if gdf.empty:
+        return {"type": "FeatureCollection", "features": []}
+
+    if gdf.crs is None:
+        gdf = gdf.set_crs("EPSG:4326")
+    else:
+        gdf = gdf.to_crs("EPSG:4326")
+
+    try:
+        return json.loads(gdf.to_json())
+    except Exception:
+        return {"type": "FeatureCollection", "features": []}
 
 
 # ── GET zones (multi-DMA support) ────────────────────────────────────────────
@@ -102,6 +135,8 @@ def get_dma_layers(
             for p in pipes
         ]
 
+    reported_leaks = _load_optional_layer_geojson(filename, "reported_leaks")
+
     return {
         "dma_name":    dma.dma_name,
         "dma_bbox":    dma.dma_bbox,
@@ -156,12 +191,14 @@ def get_dma_layers(
                 for b in dma.bulk_meters
             ],
         },
+        "reported_leaks": reported_leaks,
         "stats": {
             "pipe_count":     len(dma.pipes),
             "source_count":   len(dma.sources),
             "tank_count":     len(dma.tanks),
             "valve_count":    len(dma.valves),
             "bulk_meter_count": len(dma.bulk_meters),
+            "reported_leak_count": len(reported_leaks.get("features", [])),
             "total_pipe_length_m": round(sum(p.length_m for p in dma.pipes), 1),
         },
     }

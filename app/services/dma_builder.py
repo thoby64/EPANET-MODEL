@@ -158,7 +158,31 @@ def build_dma_inp(
         return _nearest_node_id(lon, lat, nodes)
 
     source_nodes: Dict[str, DMASource]    = {_snap(s.lon, s.lat): s for s in dma.sources}
-    tank_nodes:   Dict[str, DMATank]      = {_snap(t.lon, t.lat): t for t in dma.tanks}
+    tank_nodes:   Dict[str, DMATank]      = {}
+    tank_connector_rows: List[str]        = []
+    for tank in dma.tanks:
+        network_key = _snap(tank.lon, tank.lat)
+        tank_key = network_key
+        if network_key in source_nodes or network_key in tank_nodes:
+            helper_base = f"TH_{tank.fid}"
+            tank_key = helper_base
+            suffix = 1
+            while tank_key in nodes:
+                tank_key = f"{helper_base}_{suffix}"
+                suffix += 1
+            network_node = nodes[network_key]
+            nodes[tank_key] = NetworkNode(
+                node_id=tank_key,
+                lon=tank.lon,
+                lat=tank.lat,
+                x_m=network_node.x_m,
+                y_m=network_node.y_m,
+            )
+            tank_connector_rows.append(
+                f"  TCONN_{tank.fid}  {network_key}  {tank_key}  0.5  150.0  130.0  0  Open"
+                f"  ; STORAGE CONNECTION"
+            )
+        tank_nodes[tank_key] = tank
     bm_nodes:     Dict[str, DMABulkMeter] = {_snap(b.lon, b.lat): b for b in dma.bulk_meters}
     valve_nodes:  Dict[str, DMAValve]     = {_snap(v.lon, v.lat): v for v in dma.valves}
 
@@ -255,6 +279,10 @@ def build_dma_inp(
             f"  {e.edge_id}  {e.node_a}  {e.node_b}  "
             f"{round(length,2)}  {round(e.diam_mm,1)}  {round(e.hw_c,1)}  0  Open" + suffix
         )
+    # Preserve storage facilities that share a snapped network node with a
+    # source or another tank by attaching a dedicated EPANET tank node.
+    for trow in tank_connector_rows:
+        inp.raw(trow)
     # Valve stubs (isolation valves as short high-minor-loss pipes)
     for vrow in valve_pipe_rows:
         inp.raw(vrow)

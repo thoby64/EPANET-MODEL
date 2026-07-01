@@ -35,6 +35,7 @@ _ASSET_LAYER_MAP = {
     "bulk_meters": "bulk_meters",
 }
 _DMA_BOUNDARY_TOLERANCE_METERS = 5
+_REPORTED_LEAKS_LAYER = "reported_leaks"
 
 
 class MajiScopePreparedGpkg(BaseModel):
@@ -135,6 +136,37 @@ def _filter_to_boundary(asset_path: str, boundary):
     return gdf[gdf.geometry.intersects(_boundary_with_tolerance(boundary))].copy()
 
 
+def _geojson_to_gdf(raw_geojson: str):
+    try:
+        import geopandas as gpd
+        from shapely.geometry import shape
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="GeoPandas and Shapely are required to prepare MajiScope model files.",
+        ) from exc
+
+    try:
+        payload = json.loads(raw_geojson) if raw_geojson else {"type": "FeatureCollection", "features": []}
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=422, detail="Reported leak GeoJSON is invalid.") from exc
+
+    features = payload.get("features") if isinstance(payload, dict) else []
+    rows: list[dict[str, Any]] = []
+    for feature in features or []:
+        geometry = feature.get("geometry") if isinstance(feature, dict) else None
+        if not geometry:
+            continue
+        props = feature.get("properties") or {}
+        rows.append({**props, "geometry": shape(geometry)})
+
+    if not rows:
+        return gpd.GeoDataFrame({"geometry": []}, geometry="geometry", crs="EPSG:4326")
+
+    gdf = gpd.GeoDataFrame(rows, geometry="geometry", crs="EPSG:4326")
+    return gdf[gdf.geometry.notna()].copy()
+
+
 async def _write_upload(upload: UploadFile, directory: str, name: str) -> str | None:
     if upload is None:
         return None
@@ -204,6 +236,7 @@ async def prepare_majiscope_gpkg(
     storage_facilities: UploadFile | None = File(None),
     valves: UploadFile | None = File(None),
     bulk_meters: UploadFile | None = File(None),
+    reported_leaks_geojson: str | None = Form(None),
     _: str = Depends(require_api_key),
 ):
     settings = get_settings()
@@ -261,6 +294,22 @@ async def prepare_majiscope_gpkg(
 
             filtered.to_file(output_path, layer=layer_name, driver="GPKG")
             written_layers.append(layer_name)
+
+        if reported_leaks_geojson:
+            leaks_gdf = _geojson_to_gdf(reported_leaks_geojson)
+            if not leaks_gdf.empty:
+                if leaks_gdf.crs is None:
+                    leaks_gdf = leaks_gdf.set_crs("EPSG:4326")
+                else:
+                    leaks_gdf = leaks_gdf.to_crs("EPSG:4326")
+                leaks_gdf = leaks_gdf[leaks_gdf.geometry.intersects(_boundary_with_tolerance(boundary))].copy()
+            leak_count = int(len(leaks_gdf)) if not leaks_gdf.empty else 0
+            feature_counts[_REPORTED_LEAKS_LAYER] = leak_count
+            if leak_count > 0:
+                leaks_gdf.to_file(output_path, layer=_REPORTED_LEAKS_LAYER, driver="GPKG")
+                written_layers.append(_REPORTED_LEAKS_LAYER)
+        else:
+            feature_counts[_REPORTED_LEAKS_LAYER] = 0
 
     if feature_counts.get("waterpipes", 0) <= 0:
         raise HTTPException(status_code=422, detail="Prepared model has no water pipe features.")
