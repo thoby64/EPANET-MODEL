@@ -58,6 +58,68 @@ def _public_hydraulic_snapshot_value(value):
     return value
 
 
+def _status_event_payload(rpt, limit: int = 80) -> list[dict]:
+    events = []
+    for event in (getattr(rpt, "status_events", None) or [])[:limit]:
+        events.append({
+            "time": getattr(event, "time_hms", None),
+            "message": getattr(event, "message", None),
+        })
+    return events
+
+
+def _hydraulic_report_artifacts(rpt) -> dict:
+    if not rpt:
+        return {}
+
+    flow_balance = rpt_nrw_summary(rpt)
+    artifacts = {
+        "source": "hydraulic_rpt",
+        "balanced": bool(getattr(rpt, "balanced", True)),
+        "mass_ratio": getattr(rpt, "mass_ratio", None),
+        "flow_balance": flow_balance,
+        "status_event_count": len(getattr(rpt, "status_events", None) or []),
+        "status_events": _status_event_payload(rpt),
+        "warnings": list(getattr(rpt, "warnings", None) or []),
+    }
+
+    fb = getattr(rpt, "flow_balance", None)
+    if fb:
+        artifacts["hydraulic_balance"] = {
+            "total_inflow_m3h": round(fb.total_inflow_m3h, 3),
+            "consumer_demand_m3h": round(fb.consumer_demand_m3h, 3),
+            "demand_deficit_m3h": round(fb.demand_deficit_m3h, 3),
+            "leakage_flow_m3h": round(fb.leakage_flow_m3h, 3),
+            "total_outflow_m3h": round(fb.total_outflow_m3h, 3),
+            "storage_flow_m3h": round(fb.storage_flow_m3h, 3),
+            "flow_ratio": round(fb.flow_ratio, 4),
+            "nrw_m3h": round(fb.nrw_m3h, 3),
+            "nrw_pct": round(fb.nrw_pct, 1),
+        }
+
+    return artifacts
+
+
+def _snapshot_input_parameters(scenario: SimScenario) -> dict:
+    return {
+        "gpkg_filename": scenario.gpkg_filename,
+        "scenario_type": scenario.scenario_type,
+        "demand_model": scenario.demand_model,
+        "base_demand": scenario.base_demand,
+        "duration_hrs": scenario.duration_hrs,
+        "time_step_min": scenario.time_step_min,
+        "leakage_frac": scenario.leakage_frac,
+        "pda_pressure_min": scenario.pda_pressure_min,
+        "pda_pressure_required": scenario.pda_pressure_required,
+        "pda_pressure_exponent": scenario.pda_pressure_exponent,
+        "extra_demands": {
+            key: value
+            for key, value in (scenario.extra_demands or {}).items()
+            if key != "_majiscope"
+        },
+    }
+
+
 def _majiscope_metadata_for_file(gpkg_filename: str) -> dict | None:
     if not gpkg_filename.startswith("majiscope_") or not gpkg_filename.endswith(".gpkg"):
         return None
@@ -233,14 +295,7 @@ async def _post_majiscope_snapshot(
         "hydraulic_scenario_id": str(scenario.id),
         "scenario_name": scenario.name,
         "scenario_status": scenario.status,
-        "input_parameters_json": {
-            "gpkg_filename": scenario.gpkg_filename,
-            "base_demand": scenario.base_demand,
-            "duration_hrs": scenario.duration_hrs,
-            "time_step_min": scenario.time_step_min,
-            "leakage_frac": scenario.leakage_frac,
-            "extra_demands": {key: value for key, value in (scenario.extra_demands or {}).items() if key != "_majiscope"},
-        },
+        "input_parameters_json": _snapshot_input_parameters(scenario),
         "summary_json": _public_hydraulic_snapshot_value(merged_summary),
         "nrw_json": _public_hydraulic_snapshot_value(merged_summary.get("epanet_flow_balance")),
         "leakage_json": leakage_json,
@@ -279,14 +334,7 @@ async def _post_majiscope_failed_snapshot(*, scenario: SimScenario, error_messag
         "hydraulic_scenario_id": str(scenario.id),
         "scenario_name": scenario.name,
         "scenario_status": "FAILED",
-        "input_parameters_json": {
-            "gpkg_filename": scenario.gpkg_filename,
-            "base_demand": scenario.base_demand,
-            "duration_hrs": scenario.duration_hrs,
-            "time_step_min": scenario.time_step_min,
-            "leakage_frac": scenario.leakage_frac,
-            "extra_demands": {key: value for key, value in (scenario.extra_demands or {}).items() if key != "_majiscope"},
-        },
+        "input_parameters_json": _snapshot_input_parameters(scenario),
         "alerts_json": {"warnings": [error_message]},
         "completed_at": scenario.finished_at.isoformat() if scenario.finished_at else None,
         "execution_duration_seconds": _execution_duration_seconds(scenario),
@@ -391,6 +439,8 @@ def _build_snapshot_heat_sources(*, output, leakage_json: Optional[dict]) -> tup
         heat_modes.append("pressure")
     if low_pressure_available:
         heat_modes.append("low_pressure")
+    if pipe_features:
+        heat_modes.append("pipe_flow")
     hotspot_features = ((leakage_json or {}).get("hotspots_geojson") or {}).get("features") or []
     if hotspot_features:
         heat_modes.append("leakage_risk")
@@ -520,7 +570,16 @@ async def run_simulation_task(scenario_id: int) -> None:
                 logger.info("[%d] %d leak report(s) will be injected", scenario_id, len(leak_events))
 
             # ── run simulation ────────────────────────────────────────────────
-            output = run_simulation(inp_path, leak_events=leak_events)
+            output = run_simulation(
+                inp_path,
+                duration_hrs=scenario.duration_hrs,
+                time_step_min=scenario.time_step_min,
+                leak_events=leak_events,
+                demand_model=scenario.demand_model,
+                pda_pressure_min=scenario.pda_pressure_min,
+                pda_pressure_required=scenario.pda_pressure_required,
+                pda_pressure_exponent=scenario.pda_pressure_exponent,
+            )
 
             # ── persist results ───────────────────────────────────────────────
             rows: List[SimResult] = []
@@ -558,14 +617,18 @@ async def run_simulation_task(scenario_id: int) -> None:
 
             # ── enrich summary with .rpt flow balance ─────────────────────────
             merged_summary = dict(output.summary)
+            merged_summary["scenario_type"] = scenario.scenario_type
+            merged_summary["demand_model"] = scenario.demand_model
             rpt = parse_rpt(inp_path)
             if rpt:
+                report_artifacts = _hydraulic_report_artifacts(rpt)
                 merged_summary["epanet_flow_balance"] = rpt_nrw_summary(rpt)
                 merged_summary["epanet_status_events"] = len(rpt.status_events)
+                merged_summary["hydraulic_report_artifacts"] = report_artifacts
                 if rpt.flow_balance:
                     merged_summary["inlet_flow_m3h"]   = rpt.flow_balance.total_inflow_m3h
                     merged_summary["total_demand_m3h"] = rpt.flow_balance.consumer_demand_m3h
-                if not rpt.balanced:
+                if rpt.warnings:
                     merged_summary.setdefault("warnings", []).extend(rpt.warnings)
 
             # ── mark DONE ─────────────────────────────────────────────────────

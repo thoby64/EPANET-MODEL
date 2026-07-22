@@ -118,6 +118,10 @@ def run_simulation(
     duration_hrs:  int  = 24,
     time_step_min: int  = 60,
     leak_events:   Optional[List[dict]] = None,
+    demand_model:  str = "DDA",
+    pda_pressure_min: Optional[float] = None,
+    pda_pressure_required: Optional[float] = None,
+    pda_pressure_exponent: Optional[float] = None,
 ) -> SimulationOutput:
     """
     Run EPyT-Flow simulation from an EPANET .inp file.
@@ -310,6 +314,10 @@ def run_simulation(
         "total_pipes":          len(pipe_ids),
         "duration_hrs":         duration_hrs,
         "time_steps":           n_steps,
+        "demand_model":         demand_model,
+        "pda_pressure_min":      pda_pressure_min,
+        "pda_pressure_required": pda_pressure_required,
+        "pda_pressure_exponent": pda_pressure_exponent,
         "engine":               "EPyT-Flow v0.17.1",
     }
 

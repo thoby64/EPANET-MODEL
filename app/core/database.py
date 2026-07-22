@@ -85,6 +85,11 @@ async def _ensure_sim_scenarios_columns(conn) -> None:
     # leakage_frac was added when the DMA workflow replaced the whole-network one
     additions = {
         "leakage_frac": "FLOAT DEFAULT 0.20",
+        "scenario_type": "VARCHAR(24) DEFAULT 'baseline'",
+        "demand_model": "VARCHAR(12) DEFAULT 'DDA'",
+        "pda_pressure_min": "FLOAT",
+        "pda_pressure_required": "FLOAT",
+        "pda_pressure_exponent": "FLOAT",
         "majiscope_snapshot_payload": "JSON",
         "majiscope_snapshot_status": "VARCHAR(20)",
         "majiscope_snapshot_attempts": "INTEGER DEFAULT 0",

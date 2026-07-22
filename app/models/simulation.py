@@ -33,6 +33,11 @@ class SimScenario(Base):
     duration_hrs:   Mapped[int]   = mapped_column(Integer, default=24)
     time_step_min:  Mapped[int]   = mapped_column(Integer, default=60)
     leakage_frac:   Mapped[float] = mapped_column(Float,   default=0.20)
+    scenario_type:  Mapped[str]   = mapped_column(String(24), default="baseline")
+    demand_model:   Mapped[str]   = mapped_column(String(12), default="DDA")
+    pda_pressure_min:      Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    pda_pressure_required: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    pda_pressure_exponent: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
     # DMA metadata / pre-built .inp path stored here as a JSON dict.
     # Keys produced by the DMA router:

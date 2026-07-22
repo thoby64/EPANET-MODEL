@@ -26,12 +26,13 @@ import os
 from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.core.auth import require_api_key
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.exceptions import GpkgNotFoundError, InvalidGpkgError
+from app.core.scenario_types import normalize_scenario_type
 from app.models.simulation import SimResult, SimScenario
 from app.services.dma_builder import build_dma_inp, estimate_nrw
 from app.services.dma_ingest import ingest_dma, list_dma_zones
@@ -227,10 +228,27 @@ class DMASimRequest(BaseModel):
     base_demand_m3h: float = Field(0.011, gt=0, description="Demand per junction (m³/h)")
     leakage_frac:    float = Field(0.20,  ge=0, le=1.0,
                                    description="Extra demand fraction modelling background leakage (0.20 = +20%)")
+    scenario_type:   Optional[str] = Field(
+        None,
+        description="Simulation scenario classification. If omitted, it is derived from reported leak data.",
+    )
+    demand_model:    str = Field("DDA", description="Hydraulic demand model")
+    pda_pressure_min: Optional[float] = Field(None, ge=0)
+    pda_pressure_required: Optional[float] = Field(None, ge=0)
+    pda_pressure_exponent: Optional[float] = Field(None, ge=0)
     leak_reports:    Optional[List[LeakReport]] = Field(
         None,
         description="Active field leak reports to inject as EPyT-Flow AbruptLeakage events."
     )
+
+    @model_validator(mode="after")
+    def normalize_contract(self) -> "DMASimRequest":
+        has_reports = bool(self.leak_reports)
+        self.scenario_type = normalize_scenario_type(self.scenario_type, has_reports)
+        self.demand_model = (self.demand_model or "DDA").strip().upper()
+        if self.demand_model not in {"DDA", "PDA"}:
+            raise ValueError("demand_model must be DDA or PDA.")
+        return self
 
 
 @router.post("/{filename}/simulate", status_code=202)
@@ -312,11 +330,21 @@ async def simulate_dma(
         duration_hrs  = body.duration_hrs,
         time_step_min = body.time_step_min,
         leakage_frac  = body.leakage_frac,
+        scenario_type = body.scenario_type or "baseline",
+        demand_model  = body.demand_model,
+        pda_pressure_min      = body.pda_pressure_min,
+        pda_pressure_required = body.pda_pressure_required,
+        pda_pressure_exponent = body.pda_pressure_exponent,
         extra_demands = {
             "_dma_inp_path":        inp_path,
             "_dma_name":            dma.dma_name,
             "_zone_name":           body.zone_name,
             "_leakage_frac":        body.leakage_frac,
+            "_scenario_type":       body.scenario_type,
+            "_demand_model":        body.demand_model,
+            "_pda_pressure_min":      body.pda_pressure_min,
+            "_pda_pressure_required": body.pda_pressure_required,
+            "_pda_pressure_exponent": body.pda_pressure_exponent,
             "_total_demand_m3h":    round(body.base_demand_m3h * (1 + body.leakage_frac), 6),
             "_connectors_added":    len(repair_report.connectors_added),
             "_connector_length_m":  repair_report.total_connector_length_m,

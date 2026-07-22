@@ -125,6 +125,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--s
 #map-legend{position:absolute;bottom:14px;left:14px;z-index:900;background:var(--legend-bg);border:1px solid var(--border);padding:8px 10px;border-radius:6px;display:none}
 #heat-legend{position:absolute;bottom:14px;left:14px;z-index:910;min-width:190px;background:var(--legend-bg);border:1px solid var(--border);padding:10px 12px;border-radius:6px;box-shadow:0 10px 28px rgba(0,0,0,.18);display:none}
 .heat-legend-title{color:var(--text);font-size:10.5px;font-weight:700;margin-bottom:6px}
+.heat-scale{height:7px;border-radius:999px;margin:0 0 7px 0;border:1px solid rgba(148,163,184,.28)}
 .leg-row{display:flex;align-items:center;gap:7px;font-size:9.5px;color:var(--dim);margin:2px 0}
 .leg-dot{width:10px;height:10px;border-radius:50%;flex:none}
 .leg-line{width:16px;height:3px;flex:none}
@@ -311,7 +312,7 @@ const map=L.map("map",{preferCanvas:true,zoomControl:false}).setView([-6.13,35.8
 L.control.zoom({position:"topright"}).addTo(map);
 let baseMapLayer=null;
 map.createPane("heat-pane");
-map.getPane("heat-pane").style.filter="blur(18px) saturate(140%)";
+map.getPane("heat-pane").style.filter="none";
 map.getPane("heat-pane").style.pointerEvents="none";
 map.createPane("heat-hit-pane");
 function applyTheme(value){
@@ -701,6 +702,13 @@ function showOnlyLayer(active){
 }
 
 function heatLegendItems(mode){
+  if(mode==="pipe_flow") return [
+    {color:"#6366f1",label:"No or very low flow"},
+    {color:"#60a5fa",label:"Low flow"},
+    {color:"#facc15",label:"Moderate flow"},
+    {color:"#f97316",label:"High flow"},
+    {color:"#dc2626",label:"Very high flow"},
+  ];
   if(mode==="low_pressure") return [
     {color:"#b91c1c",label:"Critical · below 5 m"},
     {color:"#dc2626",label:"Low · 5-7 m"},
@@ -721,8 +729,15 @@ function heatLegendItems(mode){
 
 function renderHeatLegend(){
   const legend=$("heat-legend");
-  const titles={pressure:"Pressure",low_pressure:"Low Pressure",leakage_risk:"Leakage Risk"};
+  const titles={pressure:"Pressure",low_pressure:"Low Pressure",pipe_flow:"Mean Flow",leakage_risk:"Leakage Risk"};
+  const gradients={
+    pressure:"linear-gradient(90deg,#ef4444,#f97316,#facc15,#22c55e,#2563eb)",
+    low_pressure:"linear-gradient(90deg,#b91c1c,#dc2626,#f97316)",
+    pipe_flow:"linear-gradient(90deg,#6366f1,#60a5fa,#facc15,#f97316,#dc2626)",
+    leakage_risk:"linear-gradient(90deg,#a855f7,#f97316,#dc2626)",
+  };
   legend.innerHTML=`<div class="heat-legend-title">${titles[S.heatMode]||"Hydraulic intensity"}</div>`+
+    `<div class="heat-scale" style="background:${gradients[S.heatMode]||gradients.pressure}"></div>`+
     heatLegendItems(S.heatMode).map(item=>`<div class="leg-row"><div class="leg-dot" style="background:${item.color}"></div>${item.label}</div>`).join("");
   legend.style.display=S.mapView==="heat"?"block":"none";
 }
@@ -730,9 +745,15 @@ function renderHeatLegend(){
 function getSupportedHeatModes(){
   const modes=[];
   const nodeFeatures=S.resultNodesGeojson?.features||[];
+  const pipeFeatures=S.resultPipesGeojson?.features||[];
   const hotspotFeatures=S.resultLeakage?.hotspots_geojson?.features||[];
   if(nodeFeatures.some(f=>typeof f?.properties?.pressure==="number")) modes.push({id:"pressure",label:"PRESSURE"});
   if(nodeFeatures.some(f=>f?.properties?.is_low_pressure===true)) modes.push({id:"low_pressure",label:"LOW PRESSURE"});
+  if(pipeFeatures.some(f=>{
+    const p=f?.properties||{};
+    const value=p.flow_rate_max_abs ?? p.flow_rate_avg ?? p.flow_rate;
+    return typeof value==="number" && Number.isFinite(value);
+  })) modes.push({id:"pipe_flow",label:"MEAN FLOW"});
   if(hotspotFeatures.length) modes.push({id:"leakage_risk",label:"LEAKAGE RISK"});
   return modes;
 }
@@ -783,6 +804,35 @@ function pressureRadius(pressure){
   return 15;
 }
 
+function pipeFlowColor(flow){
+  const value=Math.abs(Number(flow||0));
+  if(value>=50) return "#dc2626";
+  if(value>=20) return "#f97316";
+  if(value>=5) return "#facc15";
+  if(value>0) return "#60a5fa";
+  return "#6366f1";
+}
+
+function featurePointLatLng(feature){
+  const coords=feature?.geometry?.coordinates;
+  if(feature?.geometry?.type!=="Point"||!Array.isArray(coords)||coords.length<2) return null;
+  const [lon,lat]=coords.map(Number);
+  if(!Number.isFinite(lat)||!Number.isFinite(lon)) return null;
+  return [lat,lon];
+}
+
+function featureLineLatLngs(feature){
+  const coords=feature?.geometry?.coordinates;
+  if(feature?.geometry?.type!=="LineString"||!Array.isArray(coords)) return [];
+  return coords
+    .map(coord=>{
+      if(!Array.isArray(coord)||coord.length<2) return null;
+      const [lon,lat]=coord.map(Number);
+      return Number.isFinite(lat)&&Number.isFinite(lon)?[lat,lon]:null;
+    })
+    .filter(Boolean);
+}
+
 function renderHeatMap(){
   LG.heat.clearLayers();
   LG.heat_hits.clearLayers();
@@ -798,6 +848,8 @@ function renderHeatMap(){
   let features=[];
   if(S.heatMode==="leakage_risk"){
     features=S.resultLeakage?.hotspots_geojson?.features||[];
+  }else if(S.heatMode==="pipe_flow"){
+    features=S.resultPipesGeojson?.features||[];
   }else{
     features=S.resultNodesGeojson?.features||[];
     if(S.heatMode==="low_pressure"){
@@ -806,14 +858,34 @@ function renderHeatMap(){
   }
 
   features.forEach((feature,index)=>{
-    const coords=feature?.geometry?.coordinates;
-    if(!Array.isArray(coords)||coords.length<2) return;
-    const [lon,lat]=coords;
     const props=feature.properties||{};
     let color="#38bdf8";
     let radius=18;
     let tooltipTitle="Hydraulic Heat";
     let tooltipBody="";
+
+    if(S.heatMode==="pipe_flow"){
+      const flow=Number(props.flow_rate_max_abs ?? props.flow_rate_avg ?? props.flow_rate ?? 0);
+      color=pipeFlowColor(flow);
+      tooltipTitle=props.element_id||`Pipe ${index+1}`;
+      tooltipBody=`Mean flow: ${Number.isFinite(Number(props.flow_rate_avg))?Number(props.flow_rate_avg).toFixed(3):"-"} m³/h<br>Peak flow: ${Number.isFinite(flow)?flow.toFixed(3):"-"} m³/h`;
+      const line=featureLineLatLngs(feature);
+      if(line.length){
+        L.polyline(line,{pane:"heat-hit-pane",color,weight:4,opacity:.92})
+          .bindTooltip(`<div class="tip"><b>${tooltipTitle}</b><br>${tooltipBody}</div>`,{sticky:true})
+          .addTo(LG.heat_hits);
+        return;
+      }
+      const latLng=featurePointLatLng(feature);
+      if(!latLng) return;
+      L.circleMarker(latLng,{pane:"heat-hit-pane",radius:6,color:"#101820",weight:1.2,fillColor:color,fillOpacity:.92})
+        .bindTooltip(`<div class="tip"><b>${tooltipTitle}</b><br>${tooltipBody}</div>`,{sticky:true})
+        .addTo(LG.heat_hits);
+      return;
+    }
+
+    const latLng=featurePointLatLng(feature);
+    if(!latLng) return;
 
     if(S.heatMode==="leakage_risk"){
       const score=Number(props.risk_score||0);
@@ -835,12 +907,8 @@ function renderHeatMap(){
       tooltipBody=`Pressure: ${Number.isFinite(pressure)?pressure.toFixed(2):"-"} m`;
     }
 
-    L.circleMarker([lat,lon],{
-      pane:"heat-pane",radius,color,weight:0,fillColor:color,fillOpacity:S.heatMode==="pressure"?0.32:0.4,
-    }).addTo(LG.heat);
-
-    L.circleMarker([lat,lon],{
-      pane:"heat-hit-pane",radius:Math.max(6,Math.min(10,radius/2.8)),color,weight:1.2,fillColor:color,fillOpacity:.9,
+    L.circleMarker(latLng,{
+      pane:"heat-hit-pane",radius:Math.max(5,Math.min(8,radius/3.5)),color:"#101820",weight:1.2,fillColor:color,fillOpacity:.92,
     }).bindTooltip(`<div class="tip"><b>${tooltipTitle}</b><br>${tooltipBody}</div>`,{sticky:true}).addTo(LG.heat_hits);
   });
 }
@@ -906,6 +974,8 @@ $("btn-run").addEventListener("click",async()=>{
       time_step_min:parseInt($("sim-ts").value)||60,
       base_demand_m3h:parseFloat($("sim-demand").value)||0.011,
       leakage_frac:parseFloat($("sim-lf").value)||0.20,
+      scenario_type:S.leakReports.length?"reported_leak":"baseline",
+      demand_model:"DDA",
       zone_name:S.zoneName||undefined,
       leak_reports:S.leakReports.length?S.leakReports:undefined,
     };
