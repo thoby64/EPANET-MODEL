@@ -12,7 +12,7 @@
   --text:#d4e3e8;--dim:#7591a0;--faint:#3d5560;
   --cyan:#3fc7d6;--cyan2:#1d5f68;--amber:#e09c35;--amber2:#5a3f18;
   --red:#e05248;--red2:#5a201c;--green:#4dbf82;--green2:#1a4a32;
-  --purple:#8b7ff5;--blue:#5aaddf;
+  --cyan-lite:#7fd9e4;
   --map-bg:#080e12;--map-overlay:rgba(17,26,31,.94);--legend-bg:rgba(11,18,21,.94);
   --mono:'JetBrains Mono',monospace;--sans:'Inter',system-ui,sans-serif;
 }
@@ -21,7 +21,7 @@ html[data-theme="light"]{
   --text:#0f172a;--dim:#52657d;--faint:#7b8da3;
   --cyan:#0891b2;--cyan2:#dff5fa;--amber:#c56a08;--amber2:#fff1d6;
   --red:#dc2626;--red2:#fee2e2;--green:#059669;--green2:#d1fae5;
-  --purple:#7c3aed;--blue:#2563eb;
+  --cyan-lite:#5ec6da;
   --map-bg:#e8eef4;--map-overlay:rgba(255,255,255,.96);--legend-bg:rgba(255,255,255,.96);
 }
 html[data-theme="light"] .btn.primary{color:#0c4a6e}
@@ -75,7 +75,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--s
 .status-bar.done{color:var(--green);border-color:var(--green2)}
 .status-bar.failed{color:var(--red);border-color:var(--red2)}
 .alert-box{padding:8px 10px;border-radius:2px;font-size:10.5px;margin:6px 0;border-left:3px solid}
-.alert-box.info{border-color:var(--purple);background:rgba(139,127,245,.07);color:var(--dim)}
+.alert-box.info{border-color:var(--cyan);background:rgba(63,199,214,.07);color:var(--dim)}
 .alert-box.warn{border-color:var(--amber);background:rgba(224,156,53,.07);color:var(--amber)}
 .alert-box.err{border-color:var(--red);background:rgba(224,82,72,.07);color:var(--red)}
 .layer-row{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border)}
@@ -91,7 +91,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--s
 .risk-badge{padding:2px 6px;border-radius:10px;font-size:9.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
 .risk-badge.critical{background:rgba(224,82,72,.2);color:#f5958f}
 .risk-badge.high{background:rgba(224,156,53,.2);color:#f0b55a}
-.risk-badge.medium{background:rgba(139,127,245,.2);color:#a99ff8}
+.risk-badge.medium{background:rgba(63,199,214,.2);color:#7fd9e4}
 .risk-badge.low{background:rgba(77,191,130,.2);color:#7ddba8}
 .risk-pid{font-family:var(--mono);font-size:10.5px;color:var(--dim);flex:1}
 .risk-drivers{font-size:10px;color:var(--faint);margin-top:3px}
@@ -282,11 +282,11 @@ body.integrated-mode #sidebar-header{background:var(--panel2)}
   <div id="map-toolbar"></div>
   <div id="map-legend">
     <div class="leg-row"><div class="leg-line" style="background:var(--cyan)"></div>Pipes</div>
-    <div class="leg-row"><div class="leg-dot" style="background:#4adf6e"></div>Borehole</div>
-    <div class="leg-row"><div class="leg-dot" style="background:var(--blue)"></div>Tank</div>
-    <div class="leg-row"><div class="leg-dot" style="background:#e0c048"></div>Valve</div>
-    <div class="leg-row"><div class="leg-dot" style="background:#d67bf0"></div>Bulk meter</div>
-    <div class="leg-row"><div class="leg-line" style="background:var(--purple);border-bottom:2px dashed var(--purple)"></div>Connector</div>
+    <div class="leg-row"><div class="leg-dot" style="background:var(--cyan-lite)"></div>Borehole</div>
+    <div class="leg-row"><div class="leg-dot" style="background:var(--cyan-lite)"></div>Tank</div>
+    <div class="leg-row"><div class="leg-dot" style="background:var(--cyan-lite)"></div>Valve</div>
+    <div class="leg-row"><div class="leg-dot" style="background:var(--cyan-lite)"></div>Bulk meter</div>
+    <div class="leg-row"><div class="leg-line" style="background:var(--cyan);border-bottom:2px dashed var(--cyan)"></div>Connector</div>
     <div class="leg-row"><div class="leg-dot" style="background:var(--red)"></div>Leak / Critical risk</div>
     <div class="leg-row"><div class="leg-dot" style="background:var(--amber)"></div>High risk</div>
     <div class="leg-row"><div class="leg-dot" style="background:var(--green)"></div>Low pressure</div>
@@ -583,7 +583,7 @@ function renderLayers(d){
   // Pipes
   L.geoJSON(d.pipes,{
     style:f=>({
-      color:f.properties.hw_c>=140?"#3fc7d6":f.properties.hw_c>=130?"#5aaddf":"#8ba0ad",
+      color:f.properties.hw_c>=130?"#3fc7d6":"#7fd9e4",
       weight:Math.max(1.5,Math.min(4,f.properties.diam_mm/40)),opacity:.7,
     }),
     onEachFeature:(f,l)=>l.bindTooltip(
@@ -595,7 +595,7 @@ function renderLayers(d){
   // Sources
   (d.sources.features||[]).forEach(f=>{
     const [lon,lat]=f.geometry.coordinates,p=f.properties;
-    L.circleMarker([lat,lon],{radius:9,color:"#071820",weight:2,fillColor:"#4adf6e",fillOpacity:1})
+    L.circleMarker([lat,lon],{radius:9,color:"#071820",weight:2,fillColor:"#7fd9e4",fillOpacity:1})
       .bindTooltip(`<div class="tip"><b>${p.name}</b><br>Borehole ${p.elev_m}m ASL<br>Yield: ${p.yield_m3h||"?"}m³/h · Head: ${p.total_head_m}m</div>`,{sticky:true})
       .addTo(LG.sources);
   });
@@ -603,7 +603,7 @@ function renderLayers(d){
   // Tanks
   (d.tanks.features||[]).forEach(f=>{
     const [lon,lat]=f.geometry.coordinates,p=f.properties;
-    L.circleMarker([lat,lon],{radius:9,color:"#071820",weight:2,fillColor:"#5aaddf",fillOpacity:1})
+    L.circleMarker([lat,lon],{radius:9,color:"#071820",weight:2,fillColor:"#7fd9e4",fillOpacity:1})
       .bindTooltip(`<div class="tip"><b>${p.name}</b><br>Tank ${p.elev_m}m ASL<br>Cap: ${p.cap_m3||"?"}m³ · D: ${p.diameter_m}m</div>`,{sticky:true})
       .addTo(LG.tanks);
   });
@@ -611,7 +611,7 @@ function renderLayers(d){
   // Valves
   (d.valves.features||[]).forEach(f=>{
     const [lon,lat]=f.geometry.coordinates,p=f.properties;
-    L.circleMarker([lat,lon],{radius:4,color:"#071820",weight:1.5,fillColor:p.is_isolation?"#e0c048":"#bfc0c8",fillOpacity:.9})
+    L.circleMarker([lat,lon],{radius:4,color:"#071820",weight:1.5,fillColor:p.is_isolation?"#7fd9e4":"#bfc0c8",fillOpacity:.9})
       .bindTooltip(`<div class="tip">${p.valve_type}<br>&oslash;${p.diam_mm}mm</div>`,{sticky:true})
       .addTo(LG.valves);
   });
@@ -619,7 +619,7 @@ function renderLayers(d){
   // Bulk meters
   (d.bulk_meters.features||[]).forEach(f=>{
     const [lon,lat]=f.geometry.coordinates;
-    L.circleMarker([lat,lon],{radius:8,color:"#071820",weight:2,fillColor:"#d67bf0",fillOpacity:1})
+    L.circleMarker([lat,lon],{radius:8,color:"#071820",weight:2,fillColor:"#7fd9e4",fillOpacity:1})
       .bindTooltip(`<div class="tip"><b>Bulk Meter</b><br>${f.properties.name}</div>`,{sticky:true})
       .addTo(LG.bulk_meters);
   });
@@ -643,11 +643,11 @@ function buildLayerToggles(d){
   const defs=[
     {id:"boundary",label:"DMA boundary",count:"1 polygon",color:"var(--cyan)"},
     {id:"pipes",label:"Distribution pipes",count:d.stats.pipe_count,color:"var(--cyan)"},
-    {id:"sources",label:"Water sources",count:d.stats.source_count,color:"#4adf6e"},
-    {id:"tanks",label:"Storage tanks",count:d.stats.tank_count,color:"var(--blue)"},
-    {id:"valves",label:"Valves",count:d.stats.valve_count,color:"#e0c048"},
-    {id:"bulk_meters",label:"Bulk meters",count:d.stats.bulk_meter_count,color:"#d67bf0"},
-    {id:"connectors",label:"Connectors (synthetic)",count:"–",color:"var(--purple)"},
+    {id:"sources",label:"Water sources",count:d.stats.source_count,color:"#7fd9e4"},
+    {id:"tanks",label:"Storage tanks",count:d.stats.tank_count,color:"#7fd9e4"},
+    {id:"valves",label:"Valves",count:d.stats.valve_count,color:"#7fd9e4"},
+    {id:"bulk_meters",label:"Bulk meters",count:d.stats.bulk_meter_count,color:"#7fd9e4"},
+    {id:"connectors",label:"Connectors (synthetic)",count:"–",color:"var(--cyan)"},
     {id:"sim_nodes",label:"Pressure results",count:"–",color:"var(--amber)"},
     {id:"hotspots",label:"Leakage hotspots",count:"–",color:"var(--red)"},
     {id:"leaks",label:"Reported issues",count:d.stats.reported_leak_count ?? 0,color:"var(--red)"},
@@ -703,27 +703,24 @@ function showOnlyLayer(active){
 
 function heatLegendItems(mode){
   if(mode==="pipe_flow") return [
-    {color:"#6366f1",label:"No or very low flow"},
-    {color:"#60a5fa",label:"Low flow"},
-    {color:"#facc15",label:"Moderate flow"},
-    {color:"#f97316",label:"High flow"},
+    {color:"#3fc7d6",label:"No or low flow"},
+    {color:"#e09c35",label:"Moderate flow"},
     {color:"#dc2626",label:"Very high flow"},
   ];
   if(mode==="low_pressure") return [
     {color:"#b91c1c",label:"Critical · below 5 m"},
-    {color:"#dc2626",label:"Low · 5-7 m"},
+    {color:"#e05248",label:"Low · 5-10 m"},
+    {color:"#e09c35",label:"Marginal · 10 m and above"},
   ];
   if(mode==="leakage_risk") return [
-    {color:"#a855f7",label:"Elevated · below 55%"},
-    {color:"#f97316",label:"High · 55-79%"},
+    {color:"#3fc7d6",label:"Elevated · below 55%"},
+    {color:"#e09c35",label:"High · 55-79%"},
     {color:"#dc2626",label:"Critical · 80% and above"},
   ];
   return [
-    {color:"#ef4444",label:"Critically low · below 10 m"},
-    {color:"#f97316",label:"Low · 10-20 m"},
-    {color:"#facc15",label:"Moderate · 20-30 m"},
-    {color:"#22c55e",label:"Normal · 30-45 m"},
-    {color:"#2563eb",label:"High · 45 m and above"},
+    {color:"#e05248",label:"Critically low · below 10 m"},
+    {color:"#e09c35",label:"Low to moderate · 10-30 m"},
+    {color:"#3fc7d6",label:"Normal to high · 30 m and above"},
   ];
 }
 
@@ -731,10 +728,10 @@ function renderHeatLegend(){
   const legend=$("heat-legend");
   const titles={pressure:"Pressure",low_pressure:"Low Pressure",pipe_flow:"Mean Flow",leakage_risk:"Leakage Risk"};
   const gradients={
-    pressure:"linear-gradient(90deg,#ef4444,#f97316,#facc15,#22c55e,#2563eb)",
-    low_pressure:"linear-gradient(90deg,#b91c1c,#dc2626,#f97316)",
-    pipe_flow:"linear-gradient(90deg,#6366f1,#60a5fa,#facc15,#f97316,#dc2626)",
-    leakage_risk:"linear-gradient(90deg,#a855f7,#f97316,#dc2626)",
+    pressure:"linear-gradient(90deg,#e05248,#e09c35,#3fc7d6)",
+    low_pressure:"linear-gradient(90deg,#b91c1c,#e05248,#e09c35)",
+    pipe_flow:"linear-gradient(90deg,#3fc7d6,#e09c35,#dc2626)",
+    leakage_risk:"linear-gradient(90deg,#3fc7d6,#e09c35,#dc2626)",
   };
   legend.innerHTML=`<div class="heat-legend-title">${titles[S.heatMode]||"Hydraulic intensity"}</div>`+
     `<div class="heat-scale" style="background:${gradients[S.heatMode]||gradients.pressure}"></div>`+
@@ -787,12 +784,10 @@ function syncHeatControls(){
 }
 
 function pressureColor(pressure){
-  if(pressure==null) return "#38bdf8";
-  if(pressure<10) return "#ef4444";
-  if(pressure<20) return "#f97316";
-  if(pressure<30) return "#facc15";
-  if(pressure<45) return "#22c55e";
-  return "#2563eb";
+  if(pressure==null) return "#3fc7d6";
+  if(pressure<10) return "#e05248";
+  if(pressure<30) return "#e09c35";
+  return "#3fc7d6";
 }
 
 function pressureRadius(pressure){
@@ -807,10 +802,8 @@ function pressureRadius(pressure){
 function pipeFlowColor(flow){
   const value=Math.abs(Number(flow||0));
   if(value>=50) return "#dc2626";
-  if(value>=20) return "#f97316";
-  if(value>=5) return "#facc15";
-  if(value>0) return "#60a5fa";
-  return "#6366f1";
+  if(value>=5) return "#e09c35";
+  return "#3fc7d6";
 }
 
 function featurePointLatLng(feature){
@@ -859,7 +852,7 @@ function renderHeatMap(){
 
   features.forEach((feature,index)=>{
     const props=feature.properties||{};
-    let color="#38bdf8";
+    let color="#3fc7d6";
     let radius=18;
     let tooltipTitle="Hydraulic Heat";
     let tooltipBody="";
@@ -889,13 +882,13 @@ function renderHeatMap(){
 
     if(S.heatMode==="leakage_risk"){
       const score=Number(props.risk_score||0);
-      color=score>=0.8?"#dc2626":score>=0.55?"#f97316":"#a855f7";
+      color=score>=0.8?"#dc2626":score>=0.55?"#e09c35":"#3fc7d6";
       radius=18+Math.max(0,Math.min(20,score*24));
       tooltipTitle=props.pipe_id||props.element_id||`Risk ${index+1}`;
       tooltipBody=`${String(props.risk_level||"risk").replace(/_/g," ")} · ${(score*100).toFixed(0)}%`;
     }else if(S.heatMode==="low_pressure"){
       const pressure=Number(props.pressure);
-      color=pressure<5?"#b91c1c":pressure<10?"#dc2626":"#f97316";
+      color=pressure<5?"#b91c1c":pressure<10?"#e05248":"#e09c35";
       radius=20+Math.min(18,Math.max(0,15-pressure)*1.3);
       tooltipTitle=props.element_id||`Node ${index+1}`;
       tooltipBody=`Pressure: ${Number.isFinite(pressure)?pressure.toFixed(2):"-"} m`;
@@ -963,10 +956,24 @@ function renderLeakList(){
 }
 
 // ── SIMULATE ───────────────────────────────────────────────────────────────
+function setRunButtonBusy(busy){
+  const btn=$("btn-run");
+  if(!btn) return;
+  if(busy){
+    btn.disabled=true;
+    btn.dataset.defaultLabel=btn.dataset.defaultLabel||btn.textContent;
+    btn.textContent="Simulation in progress…";
+  } else {
+    btn.disabled=false;
+    if(btn.dataset.defaultLabel) btn.textContent=btn.dataset.defaultLabel;
+  }
+}
+
 $("btn-run").addEventListener("click",async()=>{
   if(!S.file) return;
   err("err-sim",null);
   $("sim-status").style.display="none";
+  setRunButtonBusy(true);
   try{
     const body={
       name:$("sim-name").value||"DMA run",
@@ -990,7 +997,7 @@ $("btn-run").addEventListener("click",async()=>{
     if(tr.connectors_added>0 && tr.connectors_geojson){
       LG.connectors.clearLayers();
       L.geoJSON(tr.connectors_geojson,{
-        style:()=>({color:"#8b7ff5",weight:2.5,dashArray:"6 4",opacity:.85}),
+        style:()=>({color:"#3fc7d6",weight:2.5,dashArray:"6 4",opacity:.85}),
         onEachFeature:(f,l)=>l.bindTooltip(`<div class="tip">${f.properties.id}<br>${f.properties.length_m}m synthetic connector</div>`,{sticky:true})
       }).addTo(LG.connectors);
       $("lc-connectors").textContent=tr.connectors_added;
@@ -1003,6 +1010,7 @@ $("btn-run").addEventListener("click",async()=>{
     if(S.pollTimer) clearInterval(S.pollTimer);
     S.pollTimer=setInterval(poll,2500); poll();
   }catch(e){
+    setRunButtonBusy(false);
     err("err-sim","An error occurred while starting the hydraulic simulation.");
   }
 });
@@ -1015,6 +1023,7 @@ async function poll(){
       statusBar("sim-status",d.status,"simulating…");
     } else if(d.status==="DONE"){
       clearInterval(S.pollTimer);
+      setRunButtonBusy(false);
       statusBar("sim-status","done","complete — loading results…");
       renderSummary(d.summary||{});
       await loadResults(0);
@@ -1023,9 +1032,11 @@ async function poll(){
       tab("results");
     } else {
       clearInterval(S.pollTimer);
+      setRunButtonBusy(false);
       statusBar("sim-status","failed","An error occurred while running the hydraulic simulation.");
     }
   }catch(e){
+    setRunButtonBusy(false);
     clearInterval(S.pollTimer);
     err("err-sim","An error occurred while checking the hydraulic simulation.");
   }
@@ -1057,7 +1068,7 @@ async function loadResults(step){
     nj.features.forEach(f=>{
       if(!f.geometry) return;
       const [lon,lat]=f.geometry.coordinates, p=f.properties;
-      const col=p.is_low_pressure?"#4dbf82":p.pressure>45?"#e05248":p.pressure>30?"#e09c35":"#5aaddf";
+      const col=p.is_low_pressure?"#4dbf82":p.pressure>45?"#e05248":p.pressure>30?"#e09c35":"#3fc7d6";
       L.circleMarker([lat,lon],{radius:p.is_low_pressure?6:4,color:"#080e12",weight:1,fillColor:col,fillOpacity:.9})
         .bindTooltip(`<div class="tip"><b>${p.element_id}</b><br>Pressure: ${p.pressure??"-"}m${p.is_low_pressure?" ⚠ LOW":""}</div>`,{sticky:true})
         .addTo(LG.sim_nodes);
@@ -1093,12 +1104,12 @@ function renderLeakage(d){
   // Pressure zones
   $("pressure-zones").innerHTML=(d.pressure_zones||[]).map(z=>`
     <div style="display:flex;align-items:center;gap:8px;margin:3px 0">
-      <div style="width:9px;height:9px;border-radius:50%;background:${z.zone==="low"?"var(--green)":z.zone==="high"?"var(--red)":"var(--blue)"};flex:none"></div>
+      <div style="width:9px;height:9px;border-radius:50%;background:${z.zone==="low"?"var(--green)":z.zone==="high"?"var(--red)":"var(--amber)"};flex:none"></div>
       <div style="flex:1;font-size:11px">${z.zone.toUpperCase()}</div>
       <div style="font-family:var(--mono);font-size:10.5px;color:var(--cyan)">${z.count} nodes (${z.pct}%)</div>
     </div>
     <div style="background:var(--border);height:2px;border-radius:2px;margin-bottom:4px">
-      <div style="height:2px;border-radius:2px;width:${z.pct}%;background:${z.zone==="low"?"var(--green)":z.zone==="high"?"var(--red)":"var(--blue)"}"></div>
+      <div style="height:2px;border-radius:2px;width:${z.pct}%;background:${z.zone==="low"?"var(--green)":z.zone==="high"?"var(--red)":"var(--amber)"}"></div>
     </div>`).join("");
 
   // Balance chart
@@ -1114,7 +1125,7 @@ function renderLeakage(d){
         <span style="font-family:var(--mono);font-size:10px;color:var(--amber)">${(r.risk_score*100).toFixed(0)}%</span>
       </div>
       <div class="risk-drivers">${(r.drivers||[]).join(" · ")}</div>
-      <div class="risk-bar-bg"><div class="risk-bar" style="width:${r.risk_score*100}%;background:${r.risk_level==="critical"?"var(--red)":r.risk_level==="high"?"var(--amber)":"var(--purple)"}"></div></div>
+      <div class="risk-bar-bg"><div class="risk-bar" style="width:${r.risk_score*100}%;background:${r.risk_level==="critical"?"var(--red)":r.risk_level==="high"?"var(--amber)":"var(--cyan)"}"></div></div>
     </div>`).join("");
   document.querySelectorAll(".risk-item").forEach(el=>{
     el.addEventListener("click",()=>{
@@ -1132,7 +1143,7 @@ function renderLeakage(d){
   LG.hotspots.clearLayers();
   (d.hotspots_geojson?.features||[]).forEach(f=>{
     const [lon,lat]=f.geometry.coordinates,p=f.properties;
-    const col=p.risk_level==="critical"?"#e05248":p.risk_level==="high"?"#e09c35":"#8b7ff5";
+    const col=p.risk_level==="critical"?"#e05248":p.risk_level==="high"?"#e09c35":"#3fc7d6";
     L.circleMarker([lat,lon],{radius:p.risk_level==="critical"?8:6,color:"#080e12",weight:1.5,fillColor:col,fillOpacity:.9})
       .bindTooltip(`<div class="tip"><b>${p.pipe_id}</b> <span style="color:${col}">${p.risk_level}</span><br>Score: ${(p.risk_score*100).toFixed(0)}%<br>${p.drivers}</div>`,{sticky:true})
       .addTo(LG.hotspots);
