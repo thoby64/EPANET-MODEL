@@ -215,8 +215,9 @@ def build_dma_inp(
         )
         junction_keys.add(helper_id)   # VH_ is a zero-demand junction
         diam = max(25.0, v.diam_mm)
+        status = "Closed" if v.status.strip().lower() == "closed" else "Open"
         valve_pipe_rows.append(
-            f"  VPIPE_{v.fid}  {key}  {helper_id}  0.5  {diam:.1f}  130.0  10.0  Open"
+            f"  VPIPE_{v.fid}  {key}  {helper_id}  0.5  {diam:.1f}  130.0  10.0  {status}"
             f"  ; {v.valve_type}"
         )
 

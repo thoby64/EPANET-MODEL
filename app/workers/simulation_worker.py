@@ -18,15 +18,17 @@ import json
 import math
 import os
 import re
+import shutil
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 from sqlalchemy import select
 
 from app.core.database import get_session
 from app.core.config import get_settings
+from app.core.tz import utc_isoformat
 from app.models.simulation import SimResult, SimScenario
 from app.services.leakage_report import analyse_leakage
-from app.services.rpt_parser import parse_rpt, rpt_nrw_summary
+from app.services.rpt_parser import parse_rpt, persisted_report_path, rpt_nrw_summary
 from app.services.simulation_service import run_simulation
 
 logger = logging.getLogger(__name__)
@@ -53,6 +55,8 @@ def _public_hydraulic_snapshot_value(value):
         }
     if isinstance(value, list):
         return [_public_hydraulic_snapshot_value(item) for item in value]
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
     if isinstance(value, str):
         return value.replace("EPANET", "HYDRAULIC").replace("Epanet", "Hydraulic").replace("epanet", "hydraulic")
     return value
@@ -103,6 +107,8 @@ def _hydraulic_report_artifacts(rpt) -> dict:
 def _snapshot_input_parameters(scenario: SimScenario) -> dict:
     return {
         "gpkg_filename": scenario.gpkg_filename,
+        "input_type": scenario.input_type,
+        "input_filename": scenario.input_filename,
         "scenario_type": scenario.scenario_type,
         "demand_model": scenario.demand_model,
         "base_demand": scenario.base_demand,
@@ -115,7 +121,7 @@ def _snapshot_input_parameters(scenario: SimScenario) -> dict:
         "extra_demands": {
             key: value
             for key, value in (scenario.extra_demands or {}).items()
-            if key != "_majiscope"
+            if key not in {"_majiscope", "_dma_inp_path"}
         },
     }
 
@@ -143,7 +149,7 @@ def _majiscope_metadata_for_scenario(scenario: SimScenario) -> dict | None:
     return _majiscope_metadata_for_file(scenario.gpkg_filename)
 
 
-def _build_pressure_time_series(output) -> list[dict]:
+def _build_pressure_time_series(output, time_step_min: int) -> list[dict]:
     """Return compact, graph-ready pressure aggregates for each model timestep."""
     grouped: Dict[float, list] = {}
     for row in output.node_results:
@@ -156,7 +162,7 @@ def _build_pressure_time_series(output) -> list[dict]:
         rows = grouped[time_step]
         pressures = [float(row.pressure) for row in rows]
         series.append({
-            "hour": round(time_step, 4),
+            "hour": round(time_step * time_step_min / 60, 4),
             "pressure_min_m": round(min(pressures), 3),
             "pressure_avg_m": round(sum(pressures) / len(pressures), 3),
             "pressure_max_m": round(max(pressures), 3),
@@ -165,6 +171,91 @@ def _build_pressure_time_series(output) -> list[dict]:
             "node_count": len(rows),
         })
     return series
+
+
+def _build_detailed_results(output, time_step_min: int) -> dict:
+    """Build the complete per-element result payload sent to MajiScope."""
+    grouped_nodes: Dict[int, list] = {}
+    grouped_pipes: Dict[int, list] = {}
+    grouped_tanks: Dict[int, list] = {}
+    for row in output.node_results:
+        grouped_nodes.setdefault(int(row.time_step), []).append(row)
+    for row in output.pipe_results:
+        grouped_pipes.setdefault(int(row.time_step), []).append(row)
+    for row in output.tank_results:
+        grouped_tanks.setdefault(int(row.time_step), []).append(row)
+
+    time_series = []
+    for time_step in sorted(set(grouped_nodes) | set(grouped_pipes) | set(grouped_tanks)):
+        nodes = grouped_nodes.get(time_step, [])
+        pipes = grouped_pipes.get(time_step, [])
+        tanks = grouped_tanks.get(time_step, [])
+        pressures = [float(row.pressure) for row in nodes if row.pressure is not None]
+        ages = [float(row.water_age) for row in nodes if row.water_age is not None]
+        demands = [float(row.demand) for row in nodes if row.demand is not None]
+        flows = [abs(float(row.flow_rate)) for row in pipes if row.flow_rate is not None]
+        velocities = [abs(float(row.velocity)) for row in pipes if row.velocity is not None]
+        time_series.append({
+            "time_step": time_step,
+            "hour": round(time_step * time_step_min / 60, 4),
+            "pressure_min_m": min(pressures) if pressures else None,
+            "pressure_avg_m": sum(pressures) / len(pressures) if pressures else None,
+            "pressure_max_m": max(pressures) if pressures else None,
+            "water_age_avg_hrs": sum(ages) / len(ages) if ages else None,
+            "water_age_max_hrs": max(ages) if ages else None,
+            "total_demand_m3h": sum(demands) * 3600 if demands else None,
+            "low_pressure_nodes": sum(bool(row.is_low_pressure) for row in nodes),
+            "flow_avg_abs_m3s": sum(flows) / len(flows) if flows else None,
+            "flow_max_abs_m3s": max(flows) if flows else None,
+            "velocity_max_abs_mps": max(velocities) if velocities else None,
+            "tank_volumes_m3": {
+                str(row.element_id): row.volume_m3 for row in tanks
+            },
+        })
+
+    return {
+        "version": 1,
+        "time_step_min": time_step_min,
+        "time_series": time_series,
+        "nodes": [
+            {
+                "time_step": row.time_step,
+                "element_id": row.element_id,
+                "lat": row.lat,
+                "lon": row.lon,
+                "pressure_m": row.pressure,
+                "head_m": row.head,
+                "demand_m3s": row.demand,
+                "water_age_hrs": row.water_age,
+                "is_low_pressure": row.is_low_pressure,
+            }
+            for row in output.node_results
+        ],
+        "pipes": [
+            {
+                "time_step": row.time_step,
+                "element_id": row.element_id,
+                "lat": row.lat,
+                "lon": row.lon,
+                "flow_m3s": row.flow_rate,
+                "velocity_mps": row.velocity,
+                "headloss_m": row.headloss,
+                "is_high_velocity": row.is_high_velocity,
+            }
+            for row in output.pipe_results
+        ],
+        "tanks": [
+            {
+                "time_step": row.time_step,
+                "element_id": row.element_id,
+                "lat": row.lat,
+                "lon": row.lon,
+                "volume_m3": row.volume_m3,
+            }
+            for row in output.tank_results
+        ],
+        "report_text": None,
+    }
 
 
 async def _deliver_majiscope_payload(*, scenario: SimScenario, session) -> bool:
@@ -180,7 +271,7 @@ async def _deliver_majiscope_payload(*, scenario: SimScenario, session) -> bool:
         return False
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(
                 settings.majiscope_backend_url.rstrip("/") + "/api/hydraulic-model/snapshots",
                 json=payload,
@@ -282,11 +373,17 @@ async def _post_majiscope_snapshot(
         output=output,
         leakage_json=leakage_json,
     )
-    pressure_time_series = _build_pressure_time_series(output)
+    pressure_time_series = _build_pressure_time_series(output, scenario.time_step_min)
     if heat_modes:
         merged_summary["heat_map_modes"] = heat_modes
     if pressure_time_series:
         merged_summary["pressure_time_series"] = pressure_time_series
+
+    detailed_results = _build_detailed_results(output, scenario.time_step_min)
+    persisted_report = persisted_report_path(scenario.id)
+    if os.path.isfile(persisted_report):
+        with open(persisted_report, encoding="utf-8", errors="replace") as report_file:
+            detailed_results["report_text"] = report_file.read()
 
     payload = {
         "launch_session_id": metadata.get("session_id"),
@@ -299,18 +396,22 @@ async def _post_majiscope_snapshot(
         "summary_json": _public_hydraulic_snapshot_value(merged_summary),
         "nrw_json": _public_hydraulic_snapshot_value(merged_summary.get("epanet_flow_balance")),
         "leakage_json": leakage_json,
+        "detailed_results_json": _public_hydraulic_snapshot_value(detailed_results),
         "alerts_json": {
             "warnings": merged_summary.get("warnings", []),
         },
         "nodes_geojson": nodes_geojson,
         "pipes_geojson": pipes_geojson,
         "hotspots_geojson": leakage_json.get("hotspots_geojson") if isinstance(leakage_json, dict) else None,
-        "completed_at": scenario.finished_at.isoformat() if scenario.finished_at else None,
+        "completed_at": utc_isoformat(scenario.finished_at) if scenario.finished_at else None,
         "execution_duration_seconds": _execution_duration_seconds(scenario),
         "snapshot_version": 3,
         "result_quality": "complete" if merged_summary else "partial",
     }
     payload = _public_hydraulic_snapshot_value(payload)
+    # Keep the raw report byte-for-byte readable; public snapshot key
+    # normalization must not rewrite the report's original text.
+    payload["detailed_results_json"]["report_text"] = detailed_results["report_text"]
     if not payload["utility_id"] or not payload["dma_id"]:
         logger.warning("[%s] MajiScope callback skipped: utility_id or dma_id missing in launch metadata", scenario.id)
         return
@@ -336,7 +437,7 @@ async def _post_majiscope_failed_snapshot(*, scenario: SimScenario, error_messag
         "scenario_status": "FAILED",
         "input_parameters_json": _snapshot_input_parameters(scenario),
         "alerts_json": {"warnings": [error_message]},
-        "completed_at": scenario.finished_at.isoformat() if scenario.finished_at else None,
+        "completed_at": utc_isoformat(scenario.finished_at) if scenario.finished_at else None,
         "execution_duration_seconds": _execution_duration_seconds(scenario),
         "snapshot_version": 3,
         "result_quality": "failed",
@@ -481,6 +582,25 @@ def _parse_inp_coordinates(inp_path: str) -> Dict[str, Tuple[float, float]]:
     return coords
 
 
+def _parse_inp_junction_ids(inp_path: str) -> set[str]:
+    """Read junction IDs from the model so coordinate reports avoid reservoirs and tanks."""
+    junction_ids: set[str] = set()
+    in_section = False
+    try:
+        with open(inp_path, encoding="ascii", errors="replace") as fh:
+            for line in fh:
+                stripped = line.strip()
+                if stripped.startswith("["):
+                    in_section = stripped.upper() == "[JUNCTIONS]"
+                    continue
+                if not in_section or not stripped or stripped.startswith(";"):
+                    continue
+                junction_ids.add(stripped.split()[0])
+    except OSError:
+        logger.exception("Could not read junction IDs from .inp file %s", inp_path)
+    return junction_ids
+
+
 def _nearest_node(lat: float, lon: float,
                   coords: Dict[str, Tuple[float, float]]) -> Optional[str]:
     if not coords:
@@ -499,33 +619,54 @@ def _nearest_node(lat: float, lon: float,
 def _build_leak_events(extra_demands, inp_path: str, duration_sec: int) -> list:
     """
     Map lat/lon extra_demands list → EPyT-Flow leak event dicts.
-    DMA scenarios store a metadata dict (not a list) — detected and skipped.
+    DMA scenarios store metadata; resolved leak events are read from that dict.
     """
     if not extra_demands:
         return []
     if isinstance(extra_demands, dict):
-        return []       # DMA metadata dict, not leak events
+        pre_resolved = extra_demands.get("_leak_events")
+        if isinstance(pre_resolved, list):
+            return [
+                {
+                    "node_id": event["node_id"],
+                    "diameter": event["diameter"],
+                    "start_time": event["start_time"],
+                    "end_time": event["end_time"],
+                }
+                for event in pre_resolved
+            ]
+        return []
     if not isinstance(extra_demands, list):
         return []
 
     node_coords = _parse_inp_coordinates(inp_path)
-    if not node_coords:
-        logger.warning("No coordinates in .inp — leak events skipped")
+    junction_ids = _parse_inp_junction_ids(inp_path)
+    junction_coords = {
+        node_id: coordinates
+        for node_id, coordinates in node_coords.items()
+        if node_id in junction_ids
+    }
+    if not junction_coords:
+        logger.warning("No junction coordinates in .inp — leak events skipped")
         return []
 
     events = []
     for lr in extra_demands:
-        lat = lr.get("lat", 0.0)
-        lon = lr.get("lon", 0.0)
-        if lat == 0.0 and lon == 0.0:
-            continue
-        nid = _nearest_node(lat, lon, node_coords)
+        nid = lr.get("node_id")
+        if nid is None:
+            lat = lr.get("lat")
+            lon = lr.get("lon")
+            if lat is None or lon is None or (lat == 0.0 and lon == 0.0):
+                continue
+            nid = _nearest_node(lat, lon, junction_coords)
         if nid:
+            start_time = int(lr.get("start_time_s", 0))
+            end_time = min(int(lr.get("end_time_s", duration_sec)), duration_sec)
             events.append({
                 "node_id":    nid,
                 "diameter":   lr.get("diameter_m",     0.01),
-                "start_time": lr.get("start_time_s",   0),
-                "end_time":   lr.get("end_time_s",     duration_sec),
+                "start_time": start_time,
+                "end_time":   end_time,
             })
     return events
 
@@ -539,6 +680,7 @@ async def run_simulation_task(scenario_id: int) -> None:
     """
     logger.info("[%d] Starting DMA simulation task", scenario_id)
 
+    temporary_inp_dir = None
     async with get_session() as session:
         try:
             # ── mark RUNNING ──────────────────────────────────────────────────
@@ -552,7 +694,12 @@ async def run_simulation_task(scenario_id: int) -> None:
 
             # ── resolve .inp path ─────────────────────────────────────────────
             extra = scenario.extra_demands or {}
+            temporary_inp_dir = extra.get("_temporary_inp_dir") if isinstance(extra, dict) else None
             inp_path = extra.get("_dma_inp_path") if isinstance(extra, dict) else None
+            if not inp_path and scenario.input_type == "inp":
+                inp_path = os.path.join(
+                    get_settings().inp_dir, scenario.input_filename or ""
+                )
 
             if not inp_path or not os.path.isfile(inp_path):
                 raise FileNotFoundError(
@@ -564,8 +711,18 @@ async def run_simulation_task(scenario_id: int) -> None:
 
             # ── field leak reports (AbruptLeakage events) ─────────────────────
             duration_sec = scenario.duration_hrs * 3_600
-            raw_leaks    = extra.get("_leak_reports", []) if isinstance(extra, dict) else []
-            leak_events  = _build_leak_events(raw_leaks, inp_path, duration_sec)
+            raw_leaks = extra.get("_leak_reports", []) if isinstance(extra, dict) else []
+            leak_input = (
+                extra if isinstance(extra, dict) and "_leak_events" in extra
+                else raw_leaks
+            )
+            leak_events = _build_leak_events(leak_input, inp_path, duration_sec)
+            if scenario.scenario_type == "reported_leak":
+                if not raw_leaks or len(leak_events) != len(raw_leaks):
+                    raise ValueError(
+                        "Reported-leak scenario could not resolve every report to "
+                        "a network node with coordinates."
+                    )
             if leak_events:
                 logger.info("[%d] %d leak report(s) will be injected", scenario_id, len(leak_events))
 
@@ -613,12 +770,31 @@ async def run_simulation_task(scenario_id: int) -> None:
                     is_high_velocity = pr.is_high_velocity,
                 ))
 
+            for tank in output.tank_results:
+                rows.append(SimResult(
+                    scenario_id = scenario_id,
+                    time_step = tank.time_step,
+                    element_type = "tank",
+                    element_id = tank.element_id,
+                    lat = tank.lat,
+                    lon = tank.lon,
+                    volume_m3 = tank.volume_m3,
+                ))
+
             session.add_all(rows)
 
             # ── enrich summary with .rpt flow balance ─────────────────────────
             merged_summary = dict(output.summary)
             merged_summary["scenario_type"] = scenario.scenario_type
+            merged_summary["input_type"] = scenario.input_type
+            merged_summary["input_filename"] = (
+                extra.get("_input_original_filename") or scenario.input_filename
+            )
+            merged_summary["input_sha256"] = extra.get("_input_sha256")
             merged_summary["demand_model"] = scenario.demand_model
+            merged_summary["time_step_min"] = scenario.time_step_min
+            if extra.get("_model_overrides"):
+                merged_summary["model_overrides"] = extra["_model_overrides"]
             rpt = parse_rpt(inp_path)
             if rpt:
                 report_artifacts = _hydraulic_report_artifacts(rpt)
@@ -630,6 +806,17 @@ async def run_simulation_task(scenario_id: int) -> None:
                     merged_summary["total_demand_m3h"] = rpt.flow_balance.consumer_demand_m3h
                 if rpt.warnings:
                     merged_summary.setdefault("warnings", []).extend(rpt.warnings)
+
+            report_available = False
+            rpt_source = inp_path + ".rpt"
+            if os.path.isfile(rpt_source):
+                try:
+                    os.makedirs(get_settings().reports_dir, exist_ok=True)
+                    shutil.copy2(rpt_source, persisted_report_path(scenario_id))
+                    report_available = True
+                except OSError:
+                    logger.exception("[%d] Failed to persist EPANET report", scenario_id)
+            merged_summary["report_available"] = report_available
 
             # ── mark DONE ─────────────────────────────────────────────────────
             scenario = await session.get(SimScenario, scenario_id)
@@ -662,3 +849,17 @@ async def run_simulation_task(scenario_id: int) -> None:
                     await _post_majiscope_failed_snapshot(scenario=scenario, error_message=str(exc), session=session)
             except Exception:
                 pass
+        finally:
+            if (
+                temporary_inp_dir
+                and os.path.basename(temporary_inp_dir).startswith("dma_inp_editor_")
+                and os.path.isdir(temporary_inp_dir)
+            ):
+                try:
+                    shutil.rmtree(temporary_inp_dir)
+                except OSError:
+                    logger.exception(
+                        "[%d] Failed to remove temporary EPANET edit directory %s",
+                        scenario_id,
+                        temporary_inp_dir,
+                    )

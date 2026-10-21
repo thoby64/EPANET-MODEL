@@ -35,7 +35,7 @@ COPY app/ ./app/
 COPY frontend/ ./frontend/
 
 # Shared data directories (mounted from the host via volumes)
-RUN mkdir -p /data/gpkg /data/db
+RUN mkdir -p /data/gpkg /data/inp /data/db
 
 ENV PATH="/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \

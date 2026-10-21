@@ -17,7 +17,10 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from app.core.config import get_settings
 from app.core.database import ensure_storage_paths, init_db
+from app.core.tz import install_utc_datetime_serialization
 from app.routers import dma, files, majiscope, simulation, upload
+
+install_utc_datetime_serialization()
 
 logging.basicConfig(
     level=logging.INFO,

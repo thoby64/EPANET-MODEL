@@ -13,6 +13,8 @@ services:
         sync: false
       - key: GPKG_DIR
         value: /data/gpkg
+      - key: INP_DIR
+        value: /data/inp
       - key: DATABASE_URL
         value: sqlite+aiosqlite:////data/db/epanet_service.db
       - key: MAJISCOPE_BACKEND_URL

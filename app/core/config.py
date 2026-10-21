@@ -45,7 +45,9 @@ class Settings(BaseSettings):
 
     # paths
     gpkg_dir:     str = "./data/gpkg"
+    inp_dir:      str = "./data/inp"
     database_url: str = "sqlite+aiosqlite:///./data/db/epanet_service.db"
+    reports_dir:  str = "./data/reports"
 
     # simulation defaults
     default_duration_hrs: int   = 24

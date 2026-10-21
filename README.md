@@ -268,6 +268,7 @@ L.geoJSON(geoJson, {
 |----------|---------|-------------|
 | `API_KEYS` | `change-me-key-1` | Comma-separated valid API keys |
 | `GPKG_DIR` | `/data/gpkg` | Path to `.gpkg` files inside container |
+| `INP_DIR` | `./data/inp` | Storage for temporary uploaded EPANET `.inp` models |
 | `DATABASE_URL` | `sqlite+aiosqlite:////data/db/epanet_service.db` | Async DB URL |
 | `DEFAULT_DURATION_HRS` | `24` | Default simulation duration |
 | `DEFAULT_TIMESTEP_MIN` | `60` | Default time step (minutes) |
@@ -275,6 +276,68 @@ L.geoJSON(geoJson, {
 | `MIN_PRESSURE_M` | `7.0` | Low-pressure alert threshold (m) |
 | `MAX_VELOCITY_MS` | `3.0` | High-velocity alert threshold (m/s) |
 | `DEBUG` | `false` | Enable SQLAlchemy query logging |
+
+---
+
+## Optional MajiScope EPANET model upload
+
+On MajiScope's **Run Hydraulic Model** page, users can optionally upload an
+EPANET `.inp` file (maximum 50 MB). When supplied, the uploaded model is
+simulated instead of generating the simulation network from GIS. The scoped
+GeoPackage is still prepared for the map and asset context, so the usual DMA
+GIS readiness requirements still apply.
+
+Uploaded models must be readable by EPyT-Flow and contain at least one
+junction and one link. Their files are stored under `INP_DIR` and removed
+along with the temporary MajiScope session. Result markers require
+longitude/latitude coordinates in the `.inp` file; reported leak locations
+must resolve to junctions in the uploaded network.
+
+In the hydraulic map, GIS-built runs allow per-run edits to pipe diameter and
+roughness, source head, tank levels and diameter, and isolation-valve
+diameter/status.
+For an uploaded `.inp`, junctions, pipes, reservoirs, tanks, and valves with
+geographic coordinates can be clicked to edit supported parameters: junction
+elevation/demand, pipe diameter/roughness/status, reservoir head, tank
+elevation/levels/diameter, and valve diameter/setting/status. These edits are
+sent with the next simulation request; they do not modify the source GeoPackage
+or uploaded `.inp`. Map editing is unavailable when the uploaded model uses
+non-geographic coordinates.
+
+The simulation endpoint accepts these edits under `overrides`. For a GIS-built
+run:
+
+```json
+{
+  "overrides": {
+    "pipes": {"12": {"diam_mm": 100, "hw_c": 130}}
+  }
+}
+```
+
+For an uploaded `.inp`, use `inp_junctions`, `inp_pipes`, `inp_reservoirs`,
+`inp_tanks`, or `inp_valves` instead:
+
+```json
+{
+  "overrides": {
+    "inp_junctions": {"J1": {"elevation": 1352, "base_demand": 0.3}},
+    "inp_pipes": {"P1": {"diam_mm": 160, "roughness": 120, "status": "Open"}},
+    "inp_reservoirs": {"R1": {"head": 1400}},
+    "inp_tanks": {"T1": {"init_level": 4.5, "diameter": 12}},
+    "inp_valves": {"V1": {"diam_mm": 100, "status": "Closed"}}
+  }
+}
+```
+
+Use only GIS fields for a GIS-built run or the `inp_*` fields for an uploaded
+`.inp` run; the service rejects overrides that do not match the model source.
+Uploaded-model edits are applied to a temporary per-simulation copy, and the
+override values are recorded in the scenario summary.
+
+For Docker Compose, the upload directory is backed by the `inp_data` volume.
+For Render, set `INP_DIR` under the persistent `/data` disk (the default
+`/data/inp` is configured in `render.yaml`).
 
 ---
 
@@ -302,6 +365,9 @@ volumes:
 
 ```bash
 pip install -r requirements.txt
+source .venv/bin/activate
+uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+
 TEST_GPKG_FILE=duwas_network_clean.gpkg \
 GPKG_DIR=/path/to/local/gpkg \
 pytest tests/ -v

@@ -7,6 +7,8 @@ Workflow
 GET  /dma/{filename}/layers          → GeoJSON FeatureCollections for every
                                        asset layer in the DMA (pipes, sources,
                                        tanks, valves, bulk_meters, boundary).
+GET  /dma/{filename}/inp-editor      → Geographic editable elements from its
+                                       prepared .inp model.
 
 POST /dma/{filename}/simulate        → Build a full DMA EPANET model
                                        (multi-source, tanks, Hazen-Williams,
@@ -23,10 +25,12 @@ GET  /dma/{filename}/simulate/{id}/nrw
 import json
 import logging
 import os
-from typing import List, Optional
+import shutil
+import tempfile
+from typing import Dict, List, Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.core.auth import require_api_key
 from app.core.config import get_settings
@@ -35,14 +39,158 @@ from app.core.exceptions import GpkgNotFoundError, InvalidGpkgError
 from app.core.scenario_types import normalize_scenario_type
 from app.models.simulation import SimResult, SimScenario
 from app.services.dma_builder import build_dma_inp, estimate_nrw
-from app.services.dma_ingest import ingest_dma, list_dma_zones
+from app.services.dma_ingest import DMAData, ingest_dma, list_dma_zones
 from app.services.leakage_report import analyse_leakage
-from app.workers.simulation_worker import _majiscope_metadata_for_file, run_simulation_task
+from app.services.simulation_service import (
+    inspect_inp_elements,
+    patch_inp_elements,
+    validate_leak_events,
+)
+from app.workers.simulation_worker import (
+    _build_leak_events,
+    _majiscope_metadata_for_file,
+    run_simulation_task,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/dma", tags=["dma"])
+
+
+class _EditableModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def require_an_edit(self):
+        if not self.model_dump(exclude_none=True):
+            raise ValueError("At least one editable field must be provided.")
+        return self
+
+
+class PipeEdit(_EditableModel):
+    diam_mm: Optional[float] = Field(None, gt=0, allow_inf_nan=False)
+    hw_c: Optional[float] = Field(None, gt=0, allow_inf_nan=False)
+
+
+class SourceEdit(_EditableModel):
+    total_head_m: Optional[float] = Field(None, allow_inf_nan=False)
+
+
+class TankEdit(_EditableModel):
+    elev_m: Optional[float] = Field(None, allow_inf_nan=False)
+    init_level_m: Optional[float] = Field(None, allow_inf_nan=False)
+    min_level_m: Optional[float] = Field(None, allow_inf_nan=False)
+    max_level_m: Optional[float] = Field(None, allow_inf_nan=False)
+    diameter_m: Optional[float] = Field(None, gt=0, allow_inf_nan=False)
+
+
+class ValveEdit(_EditableModel):
+    diam_mm: Optional[float] = Field(None, gt=0, allow_inf_nan=False)
+    status: Optional[Literal["Open", "Closed"]] = None
+
+
+class InpJunctionEdit(_EditableModel):
+    elevation: Optional[float] = Field(None, allow_inf_nan=False)
+    base_demand: Optional[float] = Field(None, allow_inf_nan=False)
+
+
+class InpPipeEdit(_EditableModel):
+    diam_mm: Optional[float] = Field(None, gt=0, allow_inf_nan=False)
+    roughness: Optional[float] = Field(None, gt=0, allow_inf_nan=False)
+    status: Optional[Literal["Open", "Closed", "CV"]] = None
+
+
+class InpValveEdit(_EditableModel):
+    diam_mm: Optional[float] = Field(None, gt=0, allow_inf_nan=False)
+    setting: Optional[float] = Field(None, allow_inf_nan=False)
+    status: Optional[Literal["Open", "Closed", "Active"]] = None
+
+
+class InpReservoirEdit(_EditableModel):
+    head: Optional[float] = Field(None, allow_inf_nan=False)
+
+
+class InpTankEdit(_EditableModel):
+    elevation: Optional[float] = Field(None, allow_inf_nan=False)
+    init_level: Optional[float] = Field(None, allow_inf_nan=False)
+    min_level: Optional[float] = Field(None, allow_inf_nan=False)
+    max_level: Optional[float] = Field(None, allow_inf_nan=False)
+    diameter: Optional[float] = Field(None, gt=0, allow_inf_nan=False)
+
+
+class ModelOverrides(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pipes: Dict[str, PipeEdit] = Field(default_factory=dict)
+    sources: Dict[str, SourceEdit] = Field(default_factory=dict)
+    tanks: Dict[str, TankEdit] = Field(default_factory=dict)
+    valves: Dict[str, ValveEdit] = Field(default_factory=dict)
+    inp_junctions: Dict[str, InpJunctionEdit] = Field(default_factory=dict)
+    inp_pipes: Dict[str, InpPipeEdit] = Field(default_factory=dict)
+    inp_valves: Dict[str, InpValveEdit] = Field(default_factory=dict)
+    inp_reservoirs: Dict[str, InpReservoirEdit] = Field(default_factory=dict)
+    inp_tanks: Dict[str, InpTankEdit] = Field(default_factory=dict)
+
+
+def _prepared_uploaded_inp(filename: str) -> tuple[Optional[dict], Optional[str]]:
+    if not (filename.startswith("majiscope_") and filename.endswith(".gpkg")):
+        return None, None
+    metadata_path = os.path.join(get_settings().gpkg_dir, f"{filename[:-5]}.json")
+    try:
+        with open(metadata_path, encoding="utf-8") as metadata_file:
+            metadata = json.load(metadata_file)
+    except FileNotFoundError:
+        return None, None
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Prepared hydraulic model metadata is invalid.",
+        ) from exc
+
+    candidate = metadata.get("inp_filename")
+    if not candidate:
+        return metadata, None
+    safe_candidate = os.path.basename(str(candidate))
+    inp_path = os.path.join(get_settings().inp_dir, safe_candidate)
+    if not os.path.isfile(inp_path):
+        raise HTTPException(
+            status_code=410,
+            detail="The uploaded EPANET model has expired. Prepare the model again.",
+        )
+    return metadata, inp_path
+
+
+def _apply_gis_overrides(dma: DMAData, overrides: ModelOverrides) -> dict:
+    editable = {
+        "pipes": dma.pipes,
+        "sources": dma.sources,
+        "tanks": dma.tanks,
+        "valves": dma.valves,
+    }
+    applied = {}
+    for collection_name, collection in editable.items():
+        edits = getattr(overrides, collection_name)
+        by_fid = {str(asset.fid): asset for asset in collection}
+        unknown = sorted(set(edits) - set(by_fid))
+        if unknown:
+            raise ValueError(
+                f"Unknown {collection_name[:-1]} feature ID(s): {', '.join(unknown)}."
+            )
+        for feature_id, edit in edits.items():
+            values = edit.model_dump(exclude_none=True)
+            asset = by_fid[feature_id]
+            for field_name, value in values.items():
+                setattr(asset, field_name, value)
+            if collection_name == "tanks":
+                if not (
+                    asset.min_level_m <= asset.init_level_m <= asset.max_level_m
+                ):
+                    raise ValueError(
+                        f"Tank {feature_id} levels must satisfy minimum ≤ initial ≤ maximum."
+                    )
+            applied.setdefault(collection_name, {})[feature_id] = values
+    return applied
 
 
 def _load_optional_layer_geojson(filename: str, layer_name: str) -> dict:
@@ -170,6 +318,7 @@ def get_dma_layers(
                 point_feature(t.lon, t.lat, {
                     "fid": t.fid, "name": t.name, "elev_m": t.elev_m,
                     "cap_m3": t.cap_m3, "max_level_m": t.max_level_m,
+                    "init_level_m": t.init_level_m, "min_level_m": t.min_level_m,
                     "diameter_m": round(t.diameter_m, 2), "status": t.status, "type": "tank",
                 })
                 for t in dma.tanks
@@ -180,7 +329,8 @@ def get_dma_layers(
             "features": [
                 point_feature(v.lon, v.lat, {
                     "fid": v.fid, "valve_type": v.valve_type,
-                    "diam_mm": v.diam_mm, "is_isolation": v.is_isolation, "type": "valve",
+                    "diam_mm": v.diam_mm, "is_isolation": v.is_isolation,
+                    "status": v.status, "type": "valve",
                 })
                 for v in dma.valves
             ],
@@ -205,12 +355,30 @@ def get_dma_layers(
     }
 
 
+@router.get("/{filename}/inp-editor")
+def get_uploaded_inp_editor_layers(
+    filename: str,
+    _: str = Depends(require_api_key),
+):
+    """Return geographic editable network features for the prepared upload."""
+    _, inp_path = _prepared_uploaded_inp(filename)
+    if not inp_path:
+        raise HTTPException(
+            status_code=404,
+            detail="No uploaded EPANET model is associated with this prepared session.",
+        )
+    try:
+        return inspect_inp_elements(inp_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 # ── POST simulate ──────────────────────────────────────────────────────────────
 
 class LeakReport(BaseModel):
     """A field leak report to inject as an EPyT-Flow AbruptLeakage event."""
-    lat:             float = Field(..., description="Latitude of the reported leak")
-    lon:             float = Field(..., description="Longitude of the reported leak")
+    lat:             float = Field(..., ge=-90, le=90, description="Latitude of the reported leak")
+    lon:             float = Field(..., ge=-180, le=180, description="Longitude of the reported leak")
     diameter_m:      float = Field(0.01,  gt=0, description="Orifice diameter (m)")
     start_time_s:    int   = Field(0,     ge=0)
     end_time_s:      int   = Field(86400, ge=0)
@@ -239,6 +407,10 @@ class DMASimRequest(BaseModel):
     leak_reports:    Optional[List[LeakReport]] = Field(
         None,
         description="Active field leak reports to inject as EPyT-Flow AbruptLeakage events."
+    )
+    overrides: Optional[ModelOverrides] = Field(
+        None,
+        description="Per-run GIS asset or uploaded-model element edits; source files are never changed.",
     )
 
     @model_validator(mode="after")
@@ -284,22 +456,139 @@ async def simulate_dma(
     if not dma.sources and not dma.tanks:
         raise HTTPException(status_code=422, detail="No water sources or tanks found in the DMA.")
 
-    import tempfile
-    inp_dir  = tempfile.mkdtemp(prefix="dma_epyt_")
-    try:
-        inp_path, repair_report = build_dma_inp(
-            dma             = dma,
-            inp_dir         = inp_dir,
-            duration_hrs    = body.duration_hrs,
-            time_step_min   = body.time_step_min,
-            base_demand_m3h = body.base_demand_m3h,
-            leakage_frac    = body.leakage_frac,
+    inp_path = None
+    repair_report = None
+    uploaded_metadata, uploaded_inp_path = _prepared_uploaded_inp(filename)
+    uploaded_inp_filename = os.path.basename(uploaded_inp_path) if uploaded_inp_path else None
+    uploaded_inp_network = (uploaded_metadata or {}).get("inp_network")
+    uploaded_inp_original_filename = (uploaded_metadata or {}).get("inp_original_filename")
+    uploaded_inp_sha256 = (uploaded_metadata or {}).get("inp_sha256")
+    if uploaded_inp_path:
+        inp_path = uploaded_inp_path
+
+    override_request = body.overrides or ModelOverrides()
+    gis_edit_requested = any((
+        override_request.pipes,
+        override_request.sources,
+        override_request.tanks,
+        override_request.valves,
+    ))
+    inp_edit_requested = any((
+        override_request.inp_junctions,
+        override_request.inp_pipes,
+        override_request.inp_valves,
+        override_request.inp_reservoirs,
+        override_request.inp_tanks,
+    ))
+    if uploaded_inp_filename and gis_edit_requested:
+        raise HTTPException(
+            status_code=422,
+            detail="GIS feature edits cannot be applied to an uploaded EPANET model; edit its EPANET elements instead.",
         )
-    except Exception as e:
-        logger.exception("DMA .inp build failed")
-        raise HTTPException(status_code=422, detail=f"Failed to build EPANET model: {e}")
+    if not uploaded_inp_filename and inp_edit_requested:
+        raise HTTPException(
+            status_code=422,
+            detail="Uploaded-model element edits require an uploaded EPANET model.",
+        )
+
+    applied_overrides = {}
+    if not uploaded_inp_filename and gis_edit_requested:
+        try:
+            applied_overrides = _apply_gis_overrides(dma, override_request)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if not inp_path:
+        inp_dir = tempfile.mkdtemp(prefix="dma_epyt_")
+        try:
+            inp_path, repair_report = build_dma_inp(
+                dma             = dma,
+                inp_dir         = inp_dir,
+                duration_hrs    = body.duration_hrs,
+                time_step_min   = body.time_step_min,
+                base_demand_m3h = body.base_demand_m3h,
+                leakage_frac    = body.leakage_frac,
+            )
+        except Exception as e:
+            logger.exception("DMA .inp build failed")
+            raise HTTPException(status_code=422, detail=f"Failed to build EPANET model: {e}")
+    if (
+        uploaded_inp_filename
+        and body.leak_reports
+        and not (uploaded_inp_network or {}).get("coordinates_are_lonlat")
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Reported leaks require geographic coordinates in the uploaded .inp "
+                "file's [COORDINATES] section. This file has no coordinates or uses "
+                "coordinates outside longitude/latitude bounds."
+            ),
+        )
+    leak_reports_payload = [report.model_dump() for report in body.leak_reports or []]
+    resolved_leak_events = _build_leak_events(
+        leak_reports_payload, inp_path, body.duration_hrs * 3_600
+    )
+    if len(resolved_leak_events) != len(leak_reports_payload):
+        raise HTTPException(
+            status_code=422,
+            detail="Every reported leak must have valid coordinates that resolve to a node in the model.",
+        )
+    if resolved_leak_events:
+        try:
+            validate_leak_events(inp_path, resolved_leak_events, body.duration_hrs * 3_600)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    temporary_inp_dir = None
+    if uploaded_inp_filename and inp_edit_requested:
+        temporary_inp_dir = tempfile.mkdtemp(prefix="dma_inp_editor_")
+        inp_path = os.path.join(temporary_inp_dir, "edited_model.inp")
+        try:
+            patch_inp_elements(
+                uploaded_inp_path,
+                inp_path,
+                {
+                    category: {
+                        element_id: edit.model_dump(exclude_none=True)
+                        for element_id, edit in getattr(override_request, category).items()
+                    }
+                    for category in (
+                        "inp_junctions",
+                        "inp_pipes",
+                        "inp_valves",
+                        "inp_reservoirs",
+                        "inp_tanks",
+                    )
+                    if getattr(override_request, category)
+                },
+            )
+        except ValueError as exc:
+            try:
+                shutil.rmtree(temporary_inp_dir)
+            except OSError:
+                logger.exception(
+                    "Failed to remove invalid EPANET edit directory %s",
+                    temporary_inp_dir,
+                )
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        applied_overrides.update({
+            category: {
+                element_id: edit.model_dump(exclude_none=True)
+                for element_id, edit in getattr(override_request, category).items()
+            }
+            for category in (
+                "inp_junctions",
+                "inp_pipes",
+                "inp_valves",
+                "inp_reservoirs",
+                "inp_tanks",
+            )
+            if getattr(override_request, category)
+        })
 
     # Serialise connectors for the response
+    connectors = repair_report.connectors_added if repair_report else []
     connectors_geojson = {
         "type": "FeatureCollection",
         "features": [
@@ -317,13 +606,15 @@ async def simulate_dma(
                     "reason":    c.reason,
                 },
             }
-            for c in repair_report.connectors_added
+            for c in connectors
         ],
     }
 
     majiscope_metadata = _majiscope_metadata_for_file(filename)
     scenario = SimScenario(
         gpkg_filename = filename,
+        input_type    = "inp" if uploaded_inp_filename else "gpkg",
+        input_filename = uploaded_inp_filename,
         name          = body.name,
         description   = f"DMA simulation - {dma.dma_name}",
         base_demand   = body.base_demand_m3h,
@@ -337,6 +628,10 @@ async def simulate_dma(
         pda_pressure_exponent = body.pda_pressure_exponent,
         extra_demands = {
             "_dma_inp_path":        inp_path,
+            "_input_type":          "inp" if uploaded_inp_filename else "gpkg",
+            "_input_filename":      uploaded_inp_filename,
+            "_input_original_filename": uploaded_inp_original_filename,
+            "_input_sha256":        uploaded_inp_sha256,
             "_dma_name":            dma.dma_name,
             "_zone_name":           body.zone_name,
             "_leakage_frac":        body.leakage_frac,
@@ -346,20 +641,32 @@ async def simulate_dma(
             "_pda_pressure_required": body.pda_pressure_required,
             "_pda_pressure_exponent": body.pda_pressure_exponent,
             "_total_demand_m3h":    round(body.base_demand_m3h * (1 + body.leakage_frac), 6),
-            "_connectors_added":    len(repair_report.connectors_added),
-            "_connector_length_m":  repair_report.total_connector_length_m,
-            "_original_components": repair_report.original_component_count,
-            "_repair_warnings":     repair_report.warnings,
-            "_leak_reports": [
-                lr.model_dump() for lr in body.leak_reports
-            ] if body.leak_reports else [],
+            "_connectors_added":    len(connectors),
+            "_connector_length_m":  repair_report.total_connector_length_m if repair_report else 0,
+            "_original_components": repair_report.original_component_count if repair_report else None,
+            "_repair_warnings":     repair_report.warnings if repair_report else [],
+            "_leak_reports": leak_reports_payload,
+            "_leak_events": resolved_leak_events,
+            "_model_overrides": applied_overrides,
+            "_temporary_inp_dir": temporary_inp_dir,
             "_majiscope": majiscope_metadata,
         },
         status = "PENDING",
     )
     db.add(scenario)
-    await db.commit()
-    await db.refresh(scenario)
+    try:
+        await db.commit()
+        await db.refresh(scenario)
+    except Exception:
+        if temporary_inp_dir:
+            try:
+                shutil.rmtree(temporary_inp_dir)
+            except OSError:
+                logger.exception(
+                    "Failed to remove temporary EPANET edit directory %s",
+                    temporary_inp_dir,
+                )
+        raise
 
     background.add_task(run_simulation_task, scenario.id)
     logger.info("Queued DMA scenario %d for '%s'", scenario.id, filename)
@@ -367,13 +674,53 @@ async def simulate_dma(
         "id":                   scenario.id,
         "status":               "PENDING",
         "dma_name":             dma.dma_name,
+        "input_type":           scenario.input_type,
         "topology_repair": {
-            "original_components":    repair_report.original_component_count,
-            "connectors_added":       len(repair_report.connectors_added),
-            "total_connector_length_m": repair_report.total_connector_length_m,
-            "warnings":               repair_report.warnings,
+            "original_components":    repair_report.original_component_count if repair_report else None,
+            "connectors_added":       len(connectors),
+            "total_connector_length_m": repair_report.total_connector_length_m if repair_report else 0,
+            "warnings":               repair_report.warnings if repair_report else [],
             "connectors_geojson":     connectors_geojson,
         },
+    }
+
+
+@router.get("/{filename}/simulate/{scenario_id}/tanks")
+async def get_tank_volumes(
+    filename:    str,
+    scenario_id: int,
+    db:          AsyncSession = Depends(get_db),
+    _:           str          = Depends(require_api_key),
+):
+    """Return the tank-volume time series for a completed DMA simulation."""
+    scenario = await db.get(SimScenario, scenario_id)
+    if not scenario or scenario.gpkg_filename != filename:
+        raise HTTPException(status_code=404, detail="Scenario not found.")
+    if scenario.status != "DONE":
+        raise HTTPException(status_code=409, detail=f"Simulation is {scenario.status}, not DONE.")
+
+    rows = (await db.execute(
+        select(SimResult).where(
+            SimResult.scenario_id == scenario_id,
+            SimResult.element_type == "tank",
+        ).order_by(SimResult.element_id, SimResult.time_step)
+    )).scalars().all()
+
+    by_tank: dict[str, list[dict]] = {}
+    for row in rows:
+        by_tank.setdefault(row.element_id, []).append({
+            "time_step": row.time_step,
+            "hour": row.time_step * scenario.time_step_min / 60,
+            "volume_m3": row.volume_m3,
+        })
+
+    return {
+        "scenario_id": scenario_id,
+        "dma_name": (scenario.extra_demands or {}).get("_dma_name"),
+        "tanks": [
+            {"tank_id": tank_id, "series": series}
+            for tank_id, series in sorted(by_tank.items())
+        ],
     }
 
 

@@ -40,6 +40,10 @@ _REPORTED_LEAKS_LAYER = "reported_leaks"
 
 class MajiScopePreparedGpkg(BaseModel):
     filename: str
+    inp_filename: str | None = None
+    inp_original_filename: str | None = None
+    inp_sha256: str | None = None
+    inp_network: dict[str, Any] | None = None
     layers: list[str]
     feature_counts: dict[str, int]
     message: str
@@ -236,11 +240,13 @@ async def prepare_majiscope_gpkg(
     storage_facilities: UploadFile | None = File(None),
     valves: UploadFile | None = File(None),
     bulk_meters: UploadFile | None = File(None),
+    inp_file: UploadFile | None = File(None),
     reported_leaks_geojson: str | None = Form(None),
     _: str = Depends(require_api_key),
 ):
     settings = get_settings()
     os.makedirs(settings.gpkg_dir, exist_ok=True)
+    os.makedirs(settings.inp_dir, exist_ok=True)
     if not settings.majiscope_launch_secret:
         raise HTTPException(status_code=500, detail="MajiScope launch secret is not configured.")
 
@@ -249,11 +255,36 @@ async def prepare_majiscope_gpkg(
     output_name = f"majiscope_{_safe_stem(session_id)}.gpkg"
     output_path = os.path.join(settings.gpkg_dir, output_name)
     metadata_path = os.path.join(settings.gpkg_dir, f"majiscope_{_safe_stem(session_id)}.json")
+    inp_filename = f"majiscope_{_safe_stem(session_id)}.inp" if inp_file else None
+    inp_path = os.path.join(settings.inp_dir, inp_filename) if inp_filename else None
+    inp_original_filename = os.path.basename(inp_file.filename or "") if inp_file else None
 
     if os.path.exists(output_path):
         os.remove(output_path)
     if os.path.exists(metadata_path):
         os.remove(metadata_path)
+    if inp_path and os.path.exists(inp_path):
+        os.remove(inp_path)
+
+    inp_network = None
+    inp_sha256 = None
+    inp_content = None
+    if inp_file:
+        if not (inp_file.filename or "").lower().endswith(".inp"):
+            raise HTTPException(status_code=422, detail="The optional model file must have a .inp extension.")
+        inp_content = await inp_file.read(50 * 1024 * 1024 + 1)
+        if not inp_content or len(inp_content) > 50 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="The .inp file must be non-empty and no larger than 50 MB.")
+        inp_sha256 = hashlib.sha256(inp_content).hexdigest()
+        with tempfile.TemporaryDirectory(prefix="majiscope_inp_validate_") as tmpdir:
+            validation_path = os.path.join(tmpdir, "uploaded.inp")
+            with open(validation_path, "wb") as handle:
+                handle.write(inp_content)
+            try:
+                from app.services.simulation_service import validate_inp_network
+                inp_network = validate_inp_network(validation_path)
+            except (RuntimeError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     feature_counts: dict[str, int] = {}
     written_layers: list[str] = []
@@ -319,6 +350,10 @@ async def prepare_majiscope_gpkg(
             detail="Prepared model needs at least one water source or storage facility inside the DMA boundary.",
         )
 
+    if inp_content is not None and inp_path:
+        with open(inp_path, "wb") as handle:
+            handle.write(inp_content)
+
     with open(metadata_path, "w", encoding="utf-8") as handle:
         json.dump(
             {
@@ -331,6 +366,10 @@ async def prepare_majiscope_gpkg(
                 "expires_at": expires_at,
                 "layers": written_layers,
                 "feature_counts": feature_counts,
+                "inp_filename": inp_filename,
+                "inp_original_filename": inp_original_filename,
+                "inp_sha256": inp_sha256,
+                "inp_network": inp_network,
             },
             handle,
             indent=2,
@@ -338,6 +377,10 @@ async def prepare_majiscope_gpkg(
 
     return MajiScopePreparedGpkg(
         filename=output_name,
+        inp_filename=inp_filename,
+        inp_original_filename=inp_original_filename,
+        inp_sha256=inp_sha256,
+        inp_network=inp_network,
         layers=written_layers,
         feature_counts=feature_counts,
         message="Temporary hydraulic model GeoPackage prepared.",
@@ -354,9 +397,10 @@ async def cleanup_majiscope_session(
     stem = _safe_stem(session_id)
     metadata_path = os.path.join(settings.gpkg_dir, f"majiscope_{stem}.json")
     gpkg_path = os.path.join(settings.gpkg_dir, f"majiscope_{stem}.gpkg")
+    inp_path = os.path.join(settings.inp_dir, f"majiscope_{stem}.inp")
     removed: list[str] = []
 
-    for path in (gpkg_path, metadata_path):
+    for path in (gpkg_path, inp_path, metadata_path):
         if os.path.isfile(path):
             os.remove(path)
             removed.append(os.path.basename(path))
@@ -408,6 +452,12 @@ def cleanup_expired_majiscope_files() -> int:
                 gpkg_path = os.path.join(settings.gpkg_dir, str(gpkg_name))
                 if os.path.isfile(gpkg_path):
                     os.remove(gpkg_path)
+                    removed += 1
+            inp_name = metadata.get("inp_filename")
+            if inp_name:
+                inp_path = os.path.join(settings.inp_dir, os.path.basename(str(inp_name)))
+                if os.path.isfile(inp_path):
+                    os.remove(inp_path)
                     removed += 1
             os.remove(metadata_path)
             removed += 1

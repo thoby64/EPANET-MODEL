@@ -24,6 +24,13 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+from app.core.config import get_settings
+
+
+def persisted_report_path(scenario_id: int) -> str:
+    """Return the durable report path for a completed simulation."""
+    return os.path.join(get_settings().reports_dir, f"scenario_{scenario_id}.rpt")
+
 
 # ── dataclasses ───────────────────────────────────────────────────────────────
 

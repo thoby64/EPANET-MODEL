@@ -44,6 +44,8 @@ def ensure_storage_paths() -> None:
     """
     settings = get_settings()
     os.makedirs(settings.gpkg_dir, exist_ok=True)
+    os.makedirs(settings.inp_dir, exist_ok=True)
+    os.makedirs(settings.reports_dir, exist_ok=True)
 
     db_url = make_url(settings.database_url)
     if db_url.drivername.startswith("sqlite") and db_url.database:
@@ -77,6 +79,7 @@ async def init_db() -> None:
         from app.models.simulation import SimScenario, SimResult  # noqa: F401
         await conn.run_sync(Base.metadata.create_all)
         await _ensure_sim_scenarios_columns(conn)
+        await _ensure_sim_results_columns(conn)
 
 
 async def _ensure_sim_scenarios_columns(conn) -> None:
@@ -95,11 +98,21 @@ async def _ensure_sim_scenarios_columns(conn) -> None:
         "majiscope_snapshot_attempts": "INTEGER DEFAULT 0",
         "majiscope_snapshot_last_error": "TEXT",
         "majiscope_snapshot_delivered_at": "DATETIME",
+        "input_type": "VARCHAR(8) DEFAULT 'gpkg'",
+        "input_filename": "VARCHAR(256)",
     }
     for column, coltype in additions.items():
         if column not in existing:
             await conn.execute(text(f"ALTER TABLE sim_scenarios ADD COLUMN {column} {coltype}"))
             logger.info("Migrated sim_scenarios: added column '%s'", column)
+
+
+async def _ensure_sim_results_columns(conn) -> None:
+    result = await conn.execute(text("PRAGMA table_info(sim_results)"))
+    existing = {row[1] for row in result.fetchall()}
+    if "volume_m3" not in existing:
+        await conn.execute(text("ALTER TABLE sim_results ADD COLUMN volume_m3 FLOAT"))
+        logger.info("Migrated sim_results: added column 'volume_m3'")
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

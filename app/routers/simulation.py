@@ -16,18 +16,22 @@ DELETE /simulate/{id}               Delete scenario and all its results
 """
 
 import logging
+import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select
+from fastapi.responses import FileResponse, PlainTextResponse
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import require_api_key
 from app.core.database import get_db
 from app.core.exceptions import SimulationNotFoundError, SimulationStillRunningError
+from app.core.tz import UTCDateTime
 from app.models.simulation import SimResult, SimScenario
+from app.services.rpt_parser import persisted_report_path
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/simulate", tags=["simulation"])
@@ -38,15 +42,17 @@ router = APIRouter(prefix="/simulate", tags=["simulation"])
 class ScenarioResponse(BaseModel):
     id:            int
     gpkg_filename: str
+    input_type:    str = "gpkg"
+    input_filename: Optional[str] = None
     name:          str
     status:        str
     base_demand:   float
     duration_hrs:  int
     time_step_min: int
     leakage_frac:  float
-    created_at:    datetime
-    started_at:    Optional[datetime]
-    finished_at:   Optional[datetime]
+    created_at:    UTCDateTime
+    started_at:    Optional[UTCDateTime]
+    finished_at:   Optional[UTCDateTime]
     error_message: Optional[str]
     summary:       Optional[Dict[str, Any]]
 
@@ -149,6 +155,140 @@ async def get_simulation(
 ):
     """Poll until `status` is `DONE` or `FAILED`."""
     return await _get_or_404(scenario_id, db)
+
+
+@router.get("/{scenario_id}/timeseries")
+async def get_simulation_timeseries(
+    scenario_id: int,
+    db:          AsyncSession = Depends(get_db),
+    _:           str          = Depends(require_api_key),
+):
+    """Return timestep aggregates for result charts without transferring every element row."""
+    scenario = await _get_or_404(scenario_id, db)
+    if scenario.status != "DONE":
+        raise SimulationStillRunningError(scenario_id)
+
+    pressure_rows = (await db.execute(
+        select(
+            SimResult.time_step,
+            func.min(SimResult.pressure),
+            func.avg(SimResult.pressure),
+            func.max(SimResult.pressure),
+            func.avg(SimResult.water_age),
+            func.max(SimResult.water_age),
+            func.sum(SimResult.demand),
+            func.sum(case((SimResult.is_low_pressure.is_(True), 1), else_=0)),
+        ).where(
+            SimResult.scenario_id == scenario_id,
+            SimResult.element_type == "node",
+        ).group_by(SimResult.time_step).order_by(SimResult.time_step)
+    )).all()
+    pipe_rows = (await db.execute(
+        select(
+            SimResult.time_step,
+            func.avg(func.abs(SimResult.flow_rate)),
+            func.max(func.abs(SimResult.flow_rate)),
+        ).where(
+            SimResult.scenario_id == scenario_id,
+            SimResult.element_type == "pipe",
+        ).group_by(SimResult.time_step).order_by(SimResult.time_step)
+    )).all()
+
+    return {
+        "scenario_id": scenario_id,
+        "pressure": [
+            {
+                "time_step": row[0],
+                "hour": row[0] * scenario.time_step_min / 60,
+                "pressure_min_m": row[1],
+                "pressure_avg_m": row[2],
+                "pressure_max_m": row[3],
+                "water_age_avg_hrs": row[4],
+                "water_age_max_hrs": row[5],
+                "total_demand_m3h": row[6] * 3600 if row[6] is not None else None,
+                "low_pressure_nodes": row[7],
+            }
+            for row in pressure_rows
+        ],
+        "pipe_flow": [
+            {
+                "time_step": row[0],
+                "hour": row[0] * scenario.time_step_min / 60,
+                "flow_avg_m3s": row[1],
+                "flow_max_abs_m3s": row[2],
+            }
+            for row in pipe_rows
+        ],
+    }
+
+
+@router.get("/{scenario_id}/report", response_class=PlainTextResponse)
+async def get_report_text(
+    scenario_id: int,
+    db:          AsyncSession = Depends(get_db),
+    _:           str          = Depends(require_api_key),
+):
+    """Return the persisted raw EPANET report for a completed scenario."""
+    scenario = await _get_or_404(scenario_id, db)
+    if scenario.status != "DONE":
+        raise SimulationStillRunningError(scenario_id)
+    path = persisted_report_path(scenario_id)
+    if not os.path.isfile(path):
+        raise HTTPException(
+            status_code=404,
+            detail=f"No EPANET report was persisted for scenario {scenario_id}.",
+        )
+    with open(path, encoding="utf-8", errors="replace") as report_file:
+        return report_file.read()
+
+
+@router.get("/{scenario_id}/report/download")
+async def download_report(
+    scenario_id: int,
+    db:          AsyncSession = Depends(get_db),
+    _:           str          = Depends(require_api_key),
+):
+    """Download the persisted raw EPANET report."""
+    scenario = await _get_or_404(scenario_id, db)
+    if scenario.status != "DONE":
+        raise SimulationStillRunningError(scenario_id)
+    path = persisted_report_path(scenario_id)
+    if not os.path.isfile(path):
+        raise HTTPException(
+            status_code=404,
+            detail=f"No EPANET report was persisted for scenario {scenario_id}.",
+        )
+    return FileResponse(
+        path,
+        media_type="text/plain",
+        filename=f"scenario_{scenario_id}.rpt",
+    )
+
+
+@router.get("/{scenario_id}/report/summary")
+async def get_report_summary(
+    scenario_id: int,
+    db:          AsyncSession = Depends(get_db),
+    _:           str          = Depends(require_api_key),
+):
+    """Return structured EPANET report status and flow-balance information."""
+    scenario = await _get_or_404(scenario_id, db)
+    if scenario.status != "DONE":
+        raise SimulationStillRunningError(scenario_id)
+    artifacts = (scenario.summary or {}).get("hydraulic_report_artifacts")
+    if not artifacts:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No parsed EPANET report is available for scenario {scenario_id}.",
+        )
+    return {
+        "scenario_id": scenario_id,
+        "flow_balance": artifacts.get("hydraulic_balance") or artifacts.get("flow_balance"),
+        "balanced": artifacts.get("balanced"),
+        "status_events": artifacts.get("status_events", []),
+        "warnings": artifacts.get("warnings", []),
+        "mass_ratio": artifacts.get("mass_ratio"),
+    }
 
 
 @router.get("/{scenario_id}/nodes", response_model=List[NodeResultResponse])
@@ -275,3 +415,6 @@ async def delete_simulation(
         raise SimulationStillRunningError(scenario_id)
     await db.delete(s)
     await db.commit()
+    report_path = persisted_report_path(scenario_id)
+    if os.path.isfile(report_path):
+        os.remove(report_path)

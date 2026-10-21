@@ -9,6 +9,7 @@ Integration tests for the DMA endpoints:
 
 import asyncio
 import os
+from types import SimpleNamespace
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -45,6 +46,67 @@ async def test_layers_auth_required(client):
 async def test_layers_missing_file(client):
     r = await client.get("/dma/does_not_exist.gpkg/layers", headers=AUTH)
     assert r.status_code == 404
+
+
+async def test_uploaded_inp_editor_requires_authentication(client):
+    r = await client.get(f"/dma/{DMA_FILE}/inp-editor")
+    assert r.status_code == 401
+
+
+async def test_uploaded_inp_editor_requires_prepared_upload(client):
+    r = await client.get("/dma/does_not_exist.gpkg/inp-editor", headers=AUTH)
+    assert r.status_code == 404
+
+
+async def test_uploaded_inp_editor_returns_scoped_elements(client, tmp_path, monkeypatch):
+    import json
+    from app.routers import dma as dma_router
+
+    inp_dir = tmp_path / "inp"
+    inp_dir.mkdir()
+    inp_path = inp_dir / "uploaded.inp"
+    inp_path.write_text("[JUNCTIONS]\n", encoding="ascii")
+    metadata = tmp_path / "majiscope_editor.json"
+    metadata.write_text(
+        json.dumps({"inp_filename": "uploaded.inp"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        dma_router,
+        "get_settings",
+        lambda: SimpleNamespace(gpkg_dir=str(tmp_path), inp_dir=str(inp_dir)),
+    )
+    feature_collection = {
+            "type": "FeatureCollection",
+            "features": [],
+    }
+    expected = {
+        "junction_count": 1,
+        "reservoir_count": 1,
+        "tank_count": 1,
+        "pipe_count": 1,
+        "valve_count": 1,
+        "pump_count": 1,
+        "coordinates_are_lonlat": True,
+        "junctions": feature_collection,
+        "reservoirs": feature_collection,
+        "tanks": feature_collection,
+        "pipes": feature_collection,
+        "valves": feature_collection,
+        "pumps": feature_collection,
+    }
+    monkeypatch.setattr(
+        dma_router,
+        "inspect_inp_elements",
+        lambda path: expected if path == str(inp_path) else {},
+    )
+
+    response = await client.get(
+        "/dma/majiscope_editor.gpkg/inp-editor",
+        headers=AUTH,
+    )
+    assert response.status_code == 200
+    assert response.json() == expected
 
 
 async def test_layers_shape(client):
@@ -281,6 +343,197 @@ def test_topology_repair_utm_roundtrip():
         lon2, lat2 = _utm37s_to_wgs84(x, y)
         assert abs(lon2 - lon) < 1e-5, f"lon roundtrip error: {abs(lon2-lon)}"
         assert abs(lat2 - lat) < 1e-5, f"lat roundtrip error: {abs(lat2-lat)}"
+
+
+def test_build_leak_events_uses_pre_resolved_events():
+    from app.workers.simulation_worker import _build_leak_events
+
+    events = [
+        {"node_id": "J-1", "diameter": 0.02, "start_time": 10, "end_time": 120},
+    ]
+
+    assert _build_leak_events({"_leak_events": events}, "unused.inp", 3600) == events
+
+
+def test_build_leak_events_maps_coordinates(monkeypatch):
+    from app.workers import simulation_worker
+
+    monkeypatch.setattr(
+        simulation_worker,
+        "_parse_inp_coordinates",
+        lambda _: {"J-1": (-6.13, 35.83)},
+    )
+    monkeypatch.setattr(
+        simulation_worker,
+        "_parse_inp_junction_ids",
+        lambda _: {"J-1"},
+    )
+
+    events = simulation_worker._build_leak_events(
+        [{"lat": -6.13, "lon": 35.83, "diameter_m": 0.02, "end_time_s": 7200}],
+        "unused.inp",
+        3600,
+    )
+
+    assert events == [
+        {"node_id": "J-1", "diameter": 0.02, "start_time": 0, "end_time": 3600},
+    ]
+
+
+def test_patch_inp_junctions_preserves_original_and_comments(tmp_path):
+    from app.services.simulation_service import patch_inp_junctions
+
+    original = tmp_path / "source.inp"
+    edited = tmp_path / "working" / "edited.inp"
+    source_text = (
+        "[JUNCTIONS]\n"
+        "; ID Elevation Demand Pattern\n"
+        "  J1  10.0  0.2  DAILY ; preserve this comment\n"
+        "  J2  12.0  0.5\n"
+        "[RESERVOIRS]\n"
+        "  R1  25.0\n"
+    )
+    original.write_text(source_text, encoding="ascii")
+
+    result = patch_inp_junctions(
+        str(original),
+        str(edited),
+        {"j1": {"elevation": 15.5, "base_demand": 1.25}},
+    )
+
+    assert result == str(edited)
+    assert original.read_text(encoding="ascii") == source_text
+    assert edited.read_text(encoding="ascii") == (
+        "[JUNCTIONS]\n"
+        "; ID Elevation Demand Pattern\n"
+        "  J1  15.5  1.25  DAILY ; preserve this comment\n"
+        "  J2  12.0  0.5\n"
+        "[RESERVOIRS]\n"
+        "  R1  25.0\n"
+    )
+
+
+def test_patch_inp_junctions_rejects_unknown_ids(tmp_path):
+    from app.services.simulation_service import patch_inp_junctions
+
+    original = tmp_path / "source.inp"
+    edited = tmp_path / "working" / "edited.inp"
+    original.write_text("[JUNCTIONS]\n J1 10 0\n", encoding="ascii")
+
+    with pytest.raises(ValueError, match="Unknown junction ID"):
+        patch_inp_junctions(
+            str(original), str(edited), {"MISSING": {"elevation": 20}},
+        )
+    assert not edited.exists()
+
+
+def test_patch_inp_elements_supports_all_sections_and_statuses(tmp_path):
+    from app.services.simulation_service import _read_inp_records, patch_inp_elements
+
+    original = tmp_path / "source.inp"
+    edited = tmp_path / "working" / "edited.inp"
+    source_text = (
+        "[JUNCTIONS]\nJ1 10 0.2 DAILY\n"
+        "[RESERVOIRS]\nR1 25\n"
+        "[TANKS]\nT1 100 10 0 20 12 0\n"
+        "[PIPES]\nP1 J1 T1 150 300 100 0 Open ; pipe comment\n"
+        "[VALVES]\nV1 J1 T1 100 PRV 20 0\n"
+        "[STATUS]\nP1 Closed\nV1 Active\n"
+        "[END]\n"
+    )
+    original.write_text(source_text, encoding="ascii")
+
+    patch_inp_elements(
+        str(original),
+        str(edited),
+        {
+            "inp_junctions": {"J1": {"elevation": 11, "base_demand": 0.5}},
+            "inp_reservoirs": {"R1": {"head": 30}},
+            "inp_tanks": {
+                "T1": {
+                    "elevation": 101,
+                    "init_level": 15,
+                    "min_level": 5,
+                    "max_level": 22,
+                    "diameter": 14,
+                },
+            },
+            "inp_pipes": {
+                "P1": {"diam_mm": 200, "roughness": 110, "status": "CV"},
+            },
+            "inp_valves": {
+                "V1": {"diam_mm": 125, "setting": 25, "status": "Closed"},
+            },
+        },
+    )
+
+    result = edited.read_text(encoding="ascii")
+    records = _read_inp_records(result)
+    assert original.read_text(encoding="ascii") == source_text
+    assert records["[JUNCTIONS]"]["j1"] == ["J1", "11", "0.5", "DAILY"]
+    assert records["[RESERVOIRS]"]["r1"] == ["R1", "30"]
+    assert records["[TANKS]"]["t1"] == ["T1", "101", "15", "5", "22", "14", "0"]
+    assert records["[PIPES]"]["p1"] == ["P1", "J1", "T1", "150", "200", "110", "0", "CV"]
+    assert records["[VALVES]"]["v1"] == ["V1", "J1", "T1", "125", "PRV", "25", "0"]
+    assert records["[STATUS]"]["v1"] == ["V1", "Closed"]
+    assert "p1" not in records["[STATUS]"]
+    assert " ; pipe comment" in result
+
+
+def test_gis_model_overrides_mutate_only_requested_elements():
+    from app.routers.dma import ModelOverrides, PipeEdit, _apply_gis_overrides
+
+    pipe = SimpleNamespace(fid=7, diam_mm=100.0, hw_c=120.0)
+    dma = SimpleNamespace(pipes=[pipe], sources=[], tanks=[], valves=[])
+    overrides = ModelOverrides(pipes={"7": PipeEdit(diam_mm=125.0)})
+
+    applied = _apply_gis_overrides(dma, overrides)
+
+    assert pipe.diam_mm == 125.0
+    assert pipe.hw_c == 120.0
+    assert applied == {"pipes": {"7": {"diam_mm": 125.0}}}
+
+
+def test_uploaded_pipe_overrides_accept_check_valve_status():
+    from app.routers.dma import ModelOverrides
+
+    overrides = ModelOverrides(inp_pipes={"P1": {"status": "CV"}})
+
+    assert overrides.inp_pipes["P1"].status == "CV"
+
+
+def test_gis_model_overrides_reject_unknown_feature_ids():
+    from app.routers.dma import ModelOverrides, PipeEdit, _apply_gis_overrides
+
+    dma = SimpleNamespace(
+        pipes=[SimpleNamespace(fid=7, diam_mm=100.0, hw_c=120.0)],
+        sources=[],
+        tanks=[],
+        valves=[],
+    )
+    overrides = ModelOverrides(pipes={"99": PipeEdit(diam_mm=125.0)})
+
+    with pytest.raises(ValueError, match="Unknown pipe feature ID"):
+        _apply_gis_overrides(dma, overrides)
+
+
+def test_build_leak_events_maps_coordinates_only_to_junctions(tmp_path):
+    from app.workers.simulation_worker import _build_leak_events
+
+    inp_path = tmp_path / "network.inp"
+    inp_path.write_text(
+        "[JUNCTIONS]\nJ1 0 0.01\n"
+        "[RESERVOIRS]\nR1 20\n"
+        "[COORDINATES]\nJ1 35.0 -6.0\nR1 35.0001 -6.0\n[END]\n"
+    )
+
+    events = _build_leak_events(
+        [{"lat": -6.0, "lon": 35.0001, "diameter_m": 0.02}],
+        str(inp_path),
+        3600,
+    )
+
+    assert events[0]["node_id"] == "J1"
 
 
 def test_leakage_analyse_smoke():

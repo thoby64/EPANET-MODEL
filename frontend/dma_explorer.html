@@ -98,6 +98,45 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--s
 .risk-bar-bg{background:var(--border);height:3px;border-radius:2px;margin-top:5px}
 .risk-bar{height:3px;border-radius:2px;transition:width .4s}
 #balance-chart{width:100%;height:130px;background:var(--bg);border:1px solid var(--border);border-radius:2px;margin:8px 0;display:block}
+.detail-modal-overlay{display:none;position:fixed;inset:0;z-index:3000;background:rgba(3,8,12,.78);align-items:center;justify-content:center;padding:20px}
+.detail-modal-overlay.open{display:flex}
+.detail-modal{width:min(1100px,96vw);max-height:92vh;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--border2);border-radius:8px;box-shadow:0 24px 72px rgba(0,0,0,.6);overflow:hidden}
+.model-editor{display:none;position:absolute;z-index:1200;top:58px;left:12px;width:min(340px,calc(100% - 24px));max-height:calc(100% - 78px);overflow:auto;padding:12px;background:var(--map-overlay);border:1px solid var(--border2);border-radius:8px;box-shadow:0 12px 32px rgba(0,0,0,.42);backdrop-filter:blur(8px)}
+.model-editor.open{display:block}
+.model-editor-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+.model-editor-title{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase}
+.model-editor-subtitle{margin-top:3px;color:var(--dim);font-size:10px;font-family:var(--mono);overflow-wrap:anywhere}
+.model-editor-close{border:0;background:transparent;color:var(--dim);font-size:17px;line-height:1;cursor:pointer}
+.model-editor-guide{font-size:10px;color:var(--dim);margin:9px 0}
+.model-editor-fields{display:grid;gap:8px}
+.model-editor-field label{display:block;margin-bottom:3px;color:var(--dim);font-size:9px;font-family:var(--mono);letter-spacing:.04em}
+.model-editor-field input,.model-editor-field select{width:100%;padding:7px 8px;background:var(--bg);border:1px solid var(--border2);border-radius:5px;color:var(--text);font:11px var(--mono)}
+.model-editor-field input:focus,.model-editor-field select:focus{outline:none;border-color:var(--cyan)}
+.model-editor-error{display:none;color:var(--red);font-size:10px;margin-top:7px}
+.model-editor-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:9px}
+.model-editor-actions .btn{margin:0}
+.model-editor-status{font-size:10px;color:var(--dim);margin:8px 0}
+.model-editor-status.has-edits{color:var(--amber)}
+.detail-modal-head{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 18px;border-bottom:1px solid var(--border);flex:none}
+.detail-modal-head h2{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--cyan)}
+.detail-modal-actions{display:flex;align-items:center;gap:8px}
+.detail-modal-close{border:1px solid var(--border2);background:var(--panel2);color:var(--dim);padding:5px 9px;border-radius:5px;cursor:pointer}
+.detail-modal-close:hover{border-color:var(--red);color:var(--red)}
+.detail-modal-body{overflow-y:auto;padding:16px 18px}
+.detail-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:8px 0 18px}
+.detail-section{margin-bottom:18px}
+.detail-section h3{font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--dim);margin-bottom:8px;padding-bottom:5px;border-bottom:1px solid var(--border)}
+.detail-chart{width:100%;height:180px;display:block;background:var(--bg);border:1px solid var(--border);border-radius:4px}
+.detail-chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.detail-list{max-height:280px;overflow:auto}
+.detail-table-wrap{overflow:auto;max-height:340px;border:1px solid var(--border);border-radius:4px}
+.detail-table{width:100%;border-collapse:collapse;font:10px/1.4 var(--mono);white-space:nowrap}
+.detail-table th,.detail-table td{padding:6px 8px;text-align:right;border-bottom:1px solid var(--border)}
+.detail-table th{position:sticky;top:0;background:var(--panel2);color:var(--dim);font-weight:600}
+.detail-table th:first-child,.detail-table td:first-child{text-align:left}
+.detail-report{white-space:pre-wrap;word-break:break-word;max-height:420px;overflow:auto;background:var(--bg);border:1px solid var(--border);border-radius:5px;padding:12px;font:10px/1.5 var(--mono);margin-top:8px}
+.detail-note{color:var(--dim);font-size:11px;padding:8px 0}
+@media(max-width:700px){.detail-modal-overlay{padding:0}.detail-modal{width:100vw;height:100vh;max-height:100vh;border-radius:0}.detail-modal-head{padding:12px}.detail-modal-body{padding:12px}.detail-chart-grid{grid-template-columns:1fr}}
 .leak-list-wrap{max-height:180px;overflow-y:auto;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px;margin-top:6px}
 .leak-list-wrap::-webkit-scrollbar{width:5px}
 .leak-list-wrap::-webkit-scrollbar-thumb{background:var(--border2);border-radius:999px}
@@ -124,11 +163,17 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--s
 #heat-mode-controls .mbtool{font-size:9px}
 #map-legend{position:absolute;bottom:14px;left:14px;z-index:900;background:var(--legend-bg);border:1px solid var(--border);padding:8px 10px;border-radius:6px;display:none}
 #heat-legend{position:absolute;bottom:14px;left:14px;z-index:910;min-width:190px;background:var(--legend-bg);border:1px solid var(--border);padding:10px 12px;border-radius:6px;box-shadow:0 10px 28px rgba(0,0,0,.18);display:none}
+.asset-symbol{display:block;width:14px;height:14px;border:2px solid #071820;box-shadow:0 0 0 1px rgba(255,255,255,.45)}
+.asset-symbol.square{border-radius:2px}
+.asset-symbol.diamond{width:12px;height:12px;transform:rotate(45deg);border-radius:1px}
+.asset-symbol.triangle{width:0;height:0;background:transparent!important;border:0;border-left:8px solid transparent;border-right:8px solid transparent;border-bottom:15px solid var(--symbol-color);box-shadow:none}
+.asset-symbol.meter{border-radius:2px;width:12px;height:12px;transform:rotate(45deg)}
 .heat-legend-title{color:var(--text);font-size:10.5px;font-weight:700;margin-bottom:6px}
 .heat-scale{height:7px;border-radius:999px;margin:0 0 7px 0;border:1px solid rgba(148,163,184,.28)}
 .leg-row{display:flex;align-items:center;gap:7px;font-size:9.5px;color:var(--dim);margin:2px 0}
 .leg-dot{width:10px;height:10px;border-radius:50%;flex:none}
 .leg-line{width:16px;height:3px;flex:none}
+.leg-line.connector-line{height:3px;background:#d879ed}
 .tip{background:var(--legend-bg);border:1px solid var(--border2);padding:6px 9px;border-radius:6px;font-size:10.5px;font-family:var(--mono);color:var(--text);pointer-events:none}
 .zone-btn{width:100%;background:var(--bg);border:1px solid var(--border2);color:var(--dim);padding:7px 10px;border-radius:2px;text-align:left;cursor:pointer;font-size:11px;font-family:var(--mono);display:flex;align-items:center;gap:8px;margin-bottom:5px;transition:all .15s}
 .zone-btn:hover,.zone-btn.sel{border-color:var(--cyan);color:var(--text)}
@@ -213,6 +258,8 @@ body.integrated-mode #sidebar-header{background:var(--panel2)}
     <div class="tab-pane" id="tab-layers">
       <div id="layer-placeholder" style="color:var(--faint);font-size:11px">Load a DMA file first.</div>
       <div id="layer-controls" style="display:none">
+        <div id="model-editor-guide" class="alert-box info">Click a pipe, source, tank, or valve on the map to inspect and stage per-run edits.</div>
+        <div id="model-editor-status" class="model-editor-status">No staged model edits.</div>
         <div class="section-hd">Network Statistics</div>
         <div class="statgrid three" id="net-stats"></div>
         <div id="connector-alert" style="display:none"></div>
@@ -252,6 +299,7 @@ body.integrated-mode #sidebar-header{background:var(--panel2)}
       <div id="res-content" style="display:none">
         <div class="section-hd">Simulation Summary</div>
         <div class="statgrid" id="res-summary"></div>
+        <button class="btn primary" id="btn-view-details" type="button">View detailed results →</button>
 
         <div class="section-hd">Non-Revenue Water</div>
         <div class="statgrid" id="nrw-grid"></div>
@@ -282,17 +330,123 @@ body.integrated-mode #sidebar-header{background:var(--panel2)}
   <div id="map-toolbar"></div>
   <div id="map-legend">
     <div class="leg-row"><div class="leg-line" style="background:var(--cyan)"></div>Pipes</div>
-    <div class="leg-row"><div class="leg-dot" style="background:var(--cyan-lite)"></div>Borehole</div>
-    <div class="leg-row"><div class="leg-dot" style="background:var(--cyan-lite)"></div>Tank</div>
-    <div class="leg-row"><div class="leg-dot" style="background:var(--cyan-lite)"></div>Valve</div>
-    <div class="leg-row"><div class="leg-dot" style="background:var(--cyan-lite)"></div>Bulk meter</div>
-    <div class="leg-row"><div class="leg-line" style="background:var(--cyan);border-bottom:2px dashed var(--cyan)"></div>Connector</div>
-    <div class="leg-row"><div class="leg-dot" style="background:var(--red)"></div>Leak / Critical risk</div>
-    <div class="leg-row"><div class="leg-dot" style="background:var(--amber)"></div>High risk</div>
-    <div class="leg-row"><div class="leg-dot" style="background:var(--green)"></div>Low pressure</div>
+    <div class="leg-row"><div class="asset-symbol square" style="background:#3dbf72"></div>Water source</div>
+    <div class="leg-row"><div class="asset-symbol diamond" style="background:#50a0d8"></div>Storage tank</div>
+    <div class="leg-row"><div class="asset-symbol triangle" style="--symbol-color:#e09a2a"></div>Valve</div>
+    <div class="leg-row"><div class="asset-symbol meter" style="background:#c070e0"></div>Bulk meter</div>
+    <div class="leg-row" id="inp-pipe-legend-row" style="display:none"><div class="leg-line" style="background:#a78bfa"></div>Uploaded-model pipe (click to edit)</div>
+    <div class="leg-row" id="inp-valve-legend-row" style="display:none"><div class="asset-symbol triangle" style="--symbol-color:#f59e0b"></div>Uploaded-model valve (click to edit)</div>
+    <div class="leg-row" id="inp-reservoir-legend-row" style="display:none"><div class="asset-symbol square" style="background:#1eb8a0"></div>Uploaded-model reservoir (click to edit)</div>
+    <div class="leg-row" id="inp-tank-legend-row" style="display:none"><div class="asset-symbol diamond" style="background:#a78bfa"></div>Uploaded-model tank (click to edit)</div>
+    <div class="leg-row" id="inp-node-legend-row" style="display:none"><div class="leg-dot" style="background:#c084fc"></div>Uploaded-model junction (click to edit)</div>
+    <div class="leg-row" id="inp-pump-legend-row" style="display:none"><div class="leg-line" style="background:#3dbf72"></div>Uploaded-model pump</div>
+    <div class="leg-row"><div class="leg-line connector-line"></div>Connector (synthetic)</div>
+    <div class="leg-row"><div class="leg-dot" style="background:var(--red)"></div>Reported leak / critical risk</div>
+    <div class="leg-row"><div class="leg-dot" style="background:var(--amber)"></div>High risk / pressure &gt;45 m</div>
+    <div class="leg-row"><div class="leg-dot" style="background:#3fc7d6"></div>Normal pressure &gt;30 m</div>
+    <div class="leg-row"><div class="leg-dot" style="background:var(--green)"></div>Low pressure &lt;7 m</div>
   </div>
   <div id="heat-legend"></div>
+  <section id="model-editor" class="model-editor" aria-label="Model element editor">
+    <div class="model-editor-head">
+      <div>
+        <div class="model-editor-title" id="model-editor-title">Edit model element</div>
+        <div class="model-editor-subtitle" id="model-editor-subtitle"></div>
+      </div>
+      <button class="model-editor-close" id="model-editor-close" type="button" aria-label="Close editor">×</button>
+    </div>
+    <div class="model-editor-guide" id="model-editor-detail"></div>
+    <div class="model-editor-fields" id="model-editor-fields"></div>
+    <div class="model-editor-error" id="model-editor-error"></div>
+    <div class="model-editor-actions">
+      <button class="btn primary sm" id="model-editor-apply" type="button">Stage changes</button>
+      <button class="btn sm" id="model-editor-reset" type="button">Reset element</button>
+      <button class="btn danger sm" id="model-editor-clear" type="button" style="grid-column:1 / -1">Clear all edits</button>
+    </div>
+  </section>
 </main>
+
+<div id="detail-modal-overlay" class="detail-modal-overlay" role="presentation" aria-hidden="true">
+  <section class="detail-modal" role="dialog" aria-modal="true" aria-labelledby="detail-modal-title" tabindex="-1">
+    <header class="detail-modal-head">
+      <div>
+        <h2 id="detail-modal-title">Detailed simulation results</h2>
+        <div id="detail-modal-subtitle" class="detail-note"></div>
+      </div>
+      <div class="detail-modal-actions">
+        <button class="btn sm" id="btn-download-report" type="button" style="display:none">Download EPANET report</button>
+        <button class="detail-modal-close" id="btn-close-details" type="button" aria-label="Close results">✕</button>
+      </div>
+    </header>
+    <div id="detail-modal-body" class="detail-modal-body">
+      <div id="detail-load-status" class="detail-note">Loading detailed results…</div>
+
+      <section class="detail-section">
+        <h3>Simulation summary</h3>
+        <div class="detail-grid" id="detail-summary"></div>
+      </section>
+
+      <section class="detail-section">
+        <h3>Non-revenue water and flow balance</h3>
+        <div class="detail-grid" id="detail-nrw"></div>
+        <canvas id="detail-balance-chart" class="detail-chart" height="180"></canvas>
+      </section>
+
+      <div class="detail-chart-grid">
+        <section class="detail-section">
+          <h3>Pressure by timestep (m)</h3>
+          <canvas id="detail-pressure-chart" class="detail-chart" height="180"></canvas>
+        </section>
+        <section class="detail-section">
+          <h3>Water age by timestep (hours)</h3>
+          <canvas id="detail-age-chart" class="detail-chart" height="180"></canvas>
+        </section>
+        <section class="detail-section">
+          <h3>Junction demand by timestep (m³/h)</h3>
+          <canvas id="detail-demand-chart" class="detail-chart" height="180"></canvas>
+        </section>
+        <section class="detail-section">
+          <h3>Pipe flow by timestep (m³/s)</h3>
+          <canvas id="detail-flow-chart" class="detail-chart" height="180"></canvas>
+        </section>
+      </div>
+
+      <section class="detail-section">
+        <h3>Pressure zones</h3>
+        <div id="detail-pressure-zones"></div>
+      </section>
+
+      <section class="detail-section">
+        <h3>High-risk pipes</h3>
+        <div id="detail-risks" class="detail-list"></div>
+      </section>
+
+      <section class="detail-section">
+        <h3>Node measurements at selected timestep</h3>
+        <div id="detail-node-table"></div>
+      </section>
+
+      <section class="detail-section">
+        <h3>Pipe measurements at selected timestep</h3>
+        <div id="detail-pipe-table"></div>
+      </section>
+
+      <section class="detail-section">
+        <h3>Tank volumes</h3>
+        <div id="detail-tanks"></div>
+      </section>
+
+      <section class="detail-section">
+        <h3>Warnings and report status</h3>
+        <div id="detail-report-status"></div>
+        <div id="detail-warnings"></div>
+        <div id="detail-status-events"></div>
+        <button class="btn sm" id="btn-toggle-raw-report" type="button" style="display:none">View full EPANET report</button>
+        <pre id="detail-raw-report" class="detail-report" style="display:none"></pre>
+      </section>
+    </div>
+  </section>
+</div>
 
 </div>
 <script>
@@ -301,10 +455,17 @@ body.integrated-mode #sidebar-header{background:var(--panel2)}
 const S={
   base:"http://localhost:8080",key:"",file:null,zoneName:null,
   scenarioId:null,pollTimer:null,leakMode:false,leakReports:[],
-  integrated:false,sessionId:null,launchToken:null,returnUrl:"http://localhost:3000/dashboard",
+  integrated:false,sessionId:null,launchToken:null,returnUrl:"http://localhost:3000/dashboard",inpFilename:null,inpLabel:null,inpCoordinatesAreLonLat:true,
+  inpElementStats:null,inpBounds:null,loadedLayers:null,loadedFile:null,loadedZone:null,editorSelection:null,
+  gisOverrides:{pipes:new Map(),sources:new Map(),tanks:new Map(),valves:new Map()},
+  inpOverrides:{junctions:new Map(),pipes:new Map(),valves:new Map(),reservoirs:new Map(),tanks:new Map()},
+  editorFeatures:new Map(),
   dmaName:"DMA",generatedScenarioNames:new Set(),
   theme:"dark",mapView:"normal",heatMode:"pressure",
   resultNodesGeojson:null,resultPipesGeojson:null,resultLeakage:null,supportedHeatModes:[],
+  lastSummary:null,detailTimeseries:null,detailTanks:null,detailReport:null,
+  detailScenarioId:null,detailLoading:false,detailTrigger:null,
+  detailTableStep:null,nodeTablePage:0,pipeTablePage:0,
 };
 
 // ── map ────────────────────────────────────────────────────────────────────
@@ -321,9 +482,8 @@ function applyTheme(value){
   document.documentElement.dataset.theme=theme;
   try{localStorage.setItem("hydraulic-workspace-theme",theme);}catch(e){}
   if(baseMapLayer) map.removeLayer(baseMapLayer);
-  const tileStyle=theme==="light"?"light_all":"dark_all";
-  baseMapLayer=L.tileLayer(`https://{s}.basemaps.cartocdn.com/${tileStyle}/{z}/{x}/{y}{r}.png`,{
-    attribution:"&copy; OSM &copy; CARTO",maxZoom:20,subdomains:"abcd"}).addTo(map);
+  baseMapLayer=L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{
+    attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'}).addTo(map);
   baseMapLayer.bringToBack();
   map.getPane("heat-pane").style.mixBlendMode=theme==="dark"?"screen":"multiply";
   const toggle=document.getElementById("theme-toggle");
@@ -337,12 +497,24 @@ const LG={
   connectors:L.layerGroup().addTo(map),sources:L.layerGroup().addTo(map),
   tanks:L.layerGroup().addTo(map),valves:L.layerGroup().addTo(map),
   bulk_meters:L.layerGroup().addTo(map),sim_nodes:L.layerGroup().addTo(map),
+  inp_nodes:L.layerGroup().addTo(map),editor_highlights:L.layerGroup().addTo(map),
+  inp_pipes:L.layerGroup().addTo(map),inp_valves:L.layerGroup().addTo(map),
+  inp_reservoirs:L.layerGroup().addTo(map),inp_tanks:L.layerGroup().addTo(map),
+  inp_pumps:L.layerGroup().addTo(map),
   hotspots:L.layerGroup().addTo(map),leaks:L.layerGroup().addTo(map),
   heat:L.layerGroup().addTo(map),heat_hits:L.layerGroup().addTo(map),
 };
 
 // ── helpers ────────────────────────────────────────────────────────────────
 const $=id=>document.getElementById(id);
+function assetIcon(shape,color){
+  return L.divIcon({
+    className:"asset-marker",
+    html:`<span class="asset-symbol ${shape}" style="--symbol-color:${color};background:${color}"></span>`,
+    iconSize:[18,18],
+    iconAnchor:[9,9],
+  });
+}
 
 function generateIntegratedScenarioName(){
   const normalizedBase=String(S.dmaName||"DMA")
@@ -380,6 +552,22 @@ async function api(path,opts={}){
   return r.json();
 }
 
+async function apiText(path){
+  const h={};
+  if(S.key) h["X-API-Key"]=S.key;
+  if(S.integrated && S.launchToken && S.sessionId){
+    h["X-MajiScope-Launch-Token"]=S.launchToken;
+    h["X-MajiScope-Session-Id"]=S.sessionId;
+  }
+  const r=await fetch(S.base.replace(/\/$/,"")+path,{headers:h});
+  if(!r.ok){
+    let detail=r.statusText;
+    try{const body=await r.json();detail=body.detail||JSON.stringify(body);}catch(e){}
+    throw new Error(`${r.status}: ${detail}`);
+  }
+  return r.text();
+}
+
 document.querySelectorAll(".tab").forEach(t=>t.addEventListener("click",()=>tab(t.dataset.tab)));
 
 function initIntegratedLaunch(){
@@ -390,6 +578,9 @@ function initIntegratedLaunch(){
   const returnUrl=params.get("return_url");
   const utilityName=params.get("utility_name");
   const dmaName=params.get("dma_name");
+  const inpFilename=params.get("inp_filename");
+  const inpLabel=params.get("inp_label");
+  const inpCoordinatesAreLonLat=params.get("inp_coordinates_geojson");
   if(!launchToken||!sessionId||!file) return;
 
   S.integrated=true;
@@ -397,6 +588,9 @@ function initIntegratedLaunch(){
   S.launchToken=launchToken;
   S.sessionId=sessionId;
   S.file=file;
+  S.inpFilename=inpFilename||null;
+  S.inpLabel=inpLabel||null;
+  S.inpCoordinatesAreLonLat=inpCoordinatesAreLonLat!=="false";
   S.base=window.location.origin;
   if(returnUrl) S.returnUrl=returnUrl;
 
@@ -406,7 +600,7 @@ function initIntegratedLaunch(){
   $("sim-name").value=generateIntegratedScenarioName();
   $("sim-name").readOnly=true;
   $("sidebar-title").textContent="HYDRAULIC MODEL WORKSPACE";
-  $("sidebar-subtitle").textContent=`${utilityLabel} · ${dmaLabel}`;
+  $("sidebar-subtitle").textContent=`${utilityLabel} · ${dmaLabel}${S.inpFilename?` · ${S.inpLabel||"uploaded EPANET model"}${S.inpCoordinatesAreLonLat?"":" · result map positions unavailable (non-geographic .inp coordinates)"}`:""}`;
   $("tab-connect-label").textContent="OVERVIEW";
   $("api-base").value=S.base;
   $("api-key").value="";
@@ -559,9 +753,16 @@ async function doUpload(file){
 $("btn-load").addEventListener("click",async()=>{
   if(!S.file) return;
   try{
+    if(S.loadedFile&&(S.loadedFile!==S.file||S.loadedZone!==S.zoneName)) clearModelOverrides();
     const q=S.zoneName?`?zone_name=${encodeURIComponent(S.zoneName)}`:"";
     const d=await api(`/dma/${encodeURIComponent(S.file)}/layers${q}`);
+    S.loadedFile=S.file;
+    S.loadedZone=S.zoneName;
+    S.loadedLayers=d;
     renderLayers(d);
+    if(S.inpFilename) await loadInpEditorLayers();
+    else setEditorGuide("Click a pipe, source, tank, or valve on the map to inspect and stage per-run edits.");
+    buildLayerToggles(d);
     $("layer-placeholder").style.display="none";
     $("layer-controls").style.display="block";
     $("sim-placeholder").style.display="none";
@@ -572,8 +773,315 @@ $("btn-load").addEventListener("click",async()=>{
   }catch(e){err("err-connect",e.message);}
 });
 
+const editorFields={
+  pipes:[
+    {key:"diam_mm",label:"Diameter (mm)",step:"any",positive:true},
+    {key:"hw_c",label:"Hazen-Williams C",step:"any",positive:true},
+  ],
+  sources:[{key:"total_head_m",label:"Total head (m)",step:"any"}],
+  tanks:[
+    {key:"elev_m",label:"Base elevation (m)",step:"any"},
+    {key:"init_level_m",label:"Initial level (m)",step:"any"},
+    {key:"min_level_m",label:"Minimum level (m)",step:"any"},
+    {key:"max_level_m",label:"Maximum level (m)",step:"any"},
+    {key:"diameter_m",label:"Diameter (m)",step:"any",positive:true},
+  ],
+  valves:[
+    {key:"diam_mm",label:"Diameter (mm)",step:"any",positive:true},
+    {key:"status",label:"Model status",options:["Open","Closed"]},
+  ],
+  inp_junctions:[
+    {key:"elevation",label:"Junction elevation (model units)",step:"any"},
+    {key:"base_demand",label:"Base demand (model flow units)",step:"any"},
+  ],
+  inp_pipes:[
+    {key:"diam_mm",label:"Diameter (mm)",step:"any",positive:true},
+    {key:"roughness",label:"Roughness",step:"any",positive:true},
+    {key:"status",label:"Status",options:["Open","Closed","CV"]},
+  ],
+  inp_valves:[
+    {key:"diam_mm",label:"Diameter (mm)",step:"any",positive:true},
+    {key:"setting",label:"Setting",step:"any"},
+    {key:"status",label:"Initial status",options:["Open","Closed","Active"]},
+  ],
+  inp_reservoirs:[{key:"head",label:"Reservoir head",step:"any"}],
+  inp_tanks:[
+    {key:"elevation",label:"Elevation",step:"any"},
+    {key:"init_level",label:"Initial level",step:"any"},
+    {key:"min_level",label:"Minimum level",step:"any"},
+    {key:"max_level",label:"Maximum level",step:"any"},
+    {key:"diameter",label:"Diameter",step:"any",positive:true},
+  ],
+};
+const editorTypeLabels={
+  pipes:"GIS pipe",sources:"Water source",tanks:"Storage tank",
+  valves:"GIS valve",inp_junctions:"Uploaded-model junction",
+  inp_pipes:"Uploaded-model pipe",inp_valves:"Uploaded-model valve",
+  inp_reservoirs:"Uploaded-model reservoir",inp_tanks:"Uploaded-model tank",
+};
+
+function editorKey(type,id){return `${type}:${id}`;}
+function editorOverrideMap(type){
+  return type.startsWith("inp_")?S.inpOverrides[type.slice(4)]:S.gisOverrides[type];
+}
+function normalizeEditorValue(type,key,value){
+  if((type==="valves"||type==="inp_valves"||type==="inp_pipes")&&key==="status"){
+    const text=String(value||"").toLowerCase();
+    if(text==="cv") return "CV";
+    if(text==="active") return "Active";
+    return text.includes("closed")||text.includes("non-operational")?"Closed":"Open";
+  }
+  return value;
+}
+function editorId(type,properties){
+  return String(type.startsWith("inp_")?properties.id:properties.fid);
+}
+function fieldsForEditor(type,properties){
+  return editorFields[type].filter(field=>field.key!=="setting"
+    ||(properties.setting!==null&&properties.setting!==undefined&&properties.setting!==""
+      &&Number.isFinite(Number(properties.setting))));
+}
+function editorBaseline(type,properties){
+  return Object.fromEntries(fieldsForEditor(type,properties).map(field=>[
+    field.key,normalizeEditorValue(type,field.key,properties[field.key]),
+  ]));
+}
+function setEditorGuide(message){
+  $("model-editor-guide").textContent=message;
+  updateModelEditorStatus();
+}
+function updateModelEditorStatus(){
+  const total=Object.values(S.gisOverrides).reduce((count,edits)=>count+edits.size,0)
+    +Object.values(S.inpOverrides).reduce((count,edits)=>count+edits.size,0);
+  const status=$("model-editor-status");
+  status.textContent=total?`${total} element${total===1?"":"s"} edited for the next run. Source files are unchanged.`:"No staged model edits.";
+  status.classList.toggle("has-edits",total>0);
+}
+function trackEditableFeature(layer,feature,type){
+  const properties=feature.properties||{};
+  const id=editorId(type,properties);
+  if(!id||id==="undefined") return;
+  const key=editorKey(type,id);
+  S.editorFeatures.set(key,feature);
+  if(type.startsWith("inp_")!==Boolean(S.inpFilename)) return;
+  layer.on("click",event=>{
+    if(event.originalEvent) L.DomEvent.stopPropagation(event.originalEvent);
+    openModelEditor(type,feature);
+  });
+}
+function refreshEditorHighlights(){
+  LG.editor_highlights.clearLayers();
+  for(const [type,edits] of Object.entries(S.gisOverrides)){
+    for(const id of edits.keys()) addEditorHighlight(type,id);
+  }
+  for(const [kind,edits] of Object.entries(S.inpOverrides)){
+    for(const id of edits.keys()) addEditorHighlight(`inp_${kind}`,id);
+  }
+}
+function addEditorHighlight(type,id){
+  const feature=S.editorFeatures.get(editorKey(type,id));
+  if(!feature) return;
+  L.geoJSON(feature,{
+    style:()=>({color:"#fbbf24",weight:6,opacity:.95,dashArray:null,interactive:false}),
+    pointToLayer:(_feature,latlng)=>L.circleMarker(latlng,{
+      radius:11,color:"#fbbf24",weight:3,fillColor:"#fbbf24",fillOpacity:.18,interactive:false,
+    }),
+  }).addTo(LG.editor_highlights);
+}
+function openModelEditor(type,feature){
+  const properties=feature.properties||{};
+  const id=editorId(type,properties);
+  const baseline=editorBaseline(type,properties);
+  const staged=editorOverrideMap(type).get(id)||{};
+  const fieldDefinitions=fieldsForEditor(type,properties);
+  S.editorSelection={type,id,feature,properties,baseline};
+  $("model-editor-title").textContent=editorTypeLabels[type]||"Model element";
+  $("model-editor-subtitle").textContent=id;
+  $("model-editor-detail").textContent=type.startsWith("inp_")
+    ?"Edits apply to this simulation only. The uploaded .inp remains unchanged."
+    :"Edits apply to this simulation only. The source GeoPackage remains unchanged.";
+  const fieldsContainer=$("model-editor-fields");
+  fieldsContainer.replaceChildren();
+  for(const field of fieldDefinitions){
+    const wrapper=document.createElement("div");
+    wrapper.className="model-editor-field";
+    const label=document.createElement("label");
+    label.textContent=field.label;
+    label.htmlFor=`model-editor-${field.key}`;
+    let input;
+    if(field.options){
+      input=document.createElement("select");
+      field.options.forEach(option=>{
+        const item=document.createElement("option");
+        item.value=option;
+        item.textContent=option;
+        input.appendChild(item);
+      });
+      input.value=staged[field.key]??baseline[field.key]??field.options[0];
+    }else{
+      input=document.createElement("input");
+      input.type="number";
+      input.step=field.step||"any";
+      input.value=staged[field.key]??baseline[field.key]??"";
+    }
+    input.id=`model-editor-${field.key}`;
+    input.dataset.editorField=field.key;
+    wrapper.append(label,input);
+    fieldsContainer.appendChild(wrapper);
+  }
+  $("model-editor-error").style.display="none";
+  $("model-editor").classList.add("open");
+}
+function stageCurrentModelEdit(){
+  const selection=S.editorSelection;
+  if(!selection) return;
+  const {type,id,baseline,properties}=selection;
+  const fields=fieldsForEditor(type,properties);
+  const values={};
+  for(const field of fields){
+    const input=document.querySelector(`[data-editor-field="${field.key}"]`);
+    if(field.options){
+      values[field.key]=input.value;
+      continue;
+    }
+    const value=Number(input.value);
+    if(input.value.trim()===""||!Number.isFinite(value)){
+      showModelEditorError(`${field.label} must be a finite number.`);
+      return;
+    }
+    if(field.positive&&value<=0){
+      showModelEditorError(`${field.label} must be greater than zero.`);
+      return;
+    }
+    values[field.key]=value;
+  }
+  if((type==="tanks"||type==="inp_tanks")
+    &&!(values[type==="tanks"?"min_level_m":"min_level"]<=values[type==="tanks"?"init_level_m":"init_level"]
+      &&values[type==="tanks"?"init_level_m":"init_level"]<=values[type==="tanks"?"max_level_m":"max_level"])){
+    showModelEditorError("Tank levels must satisfy minimum ≤ initial ≤ maximum.");
+    return;
+  }
+  const changed={};
+  for(const field of fields){
+    const baselineValue=baseline[field.key];
+    const value=values[field.key];
+    if(typeof baselineValue==="number"&&typeof value==="number"
+      ?Math.abs(baselineValue-value)>1e-9
+      :baselineValue!==value){
+      changed[field.key]=value;
+    }
+  }
+  const overrides=editorOverrideMap(type);
+  if(Object.keys(changed).length) overrides.set(id,changed);
+  else overrides.delete(id);
+  showModelEditorError("");
+  refreshEditorHighlights();
+  updateModelEditorStatus();
+}
+function showModelEditorError(message){
+  const error=$("model-editor-error");
+  error.textContent=message;
+  error.style.display=message?"block":"none";
+}
+function resetCurrentModelEdit(){
+  if(!S.editorSelection) return;
+  const {type,id,feature}=S.editorSelection;
+  editorOverrideMap(type).delete(id);
+  refreshEditorHighlights();
+  updateModelEditorStatus();
+  openModelEditor(type,feature);
+}
+function clearModelOverrides(){
+  Object.values(S.gisOverrides).forEach(edits=>edits.clear());
+  Object.values(S.inpOverrides).forEach(edits=>edits.clear());
+  refreshEditorHighlights();
+  updateModelEditorStatus();
+  if(S.editorSelection) openModelEditor(S.editorSelection.type,S.editorSelection.feature);
+}
+async function loadInpEditorLayers(){
+  const data=await api(`/dma/${encodeURIComponent(S.file)}/inp-editor`);
+  S.inpElementStats=data;
+  S.inpCoordinatesAreLonLat=Boolean(data.coordinates_are_lonlat);
+  const legendCounts={
+    "inp-pipe-legend-row":data.pipe_count,
+    "inp-valve-legend-row":data.valve_count,
+    "inp-reservoir-legend-row":data.reservoir_count,
+    "inp-tank-legend-row":data.tank_count,
+    "inp-node-legend-row":data.junction_count,
+    "inp-pump-legend-row":data.pump_count,
+  };
+  Object.entries(legendCounts).forEach(([id,count])=>{
+    $(id).style.display=S.inpCoordinatesAreLonLat&&count?"flex":"none";
+  });
+  if(!S.inpCoordinatesAreLonLat){
+    setEditorGuide("The uploaded .inp does not have longitude/latitude coordinates, so map-click editing is unavailable.");
+    return;
+  }
+  S.inpBounds=L.latLngBounds([]);
+  const addLayer=(featureCollection,target,type,options)=>{
+    const layer=L.geoJSON(featureCollection||{features:[]},{
+      ...options,
+      onEachFeature:(feature,element)=>{
+        options.onEachFeature?.(feature,element);
+        if(type) trackEditableFeature(element,feature,type);
+      },
+    }).addTo(target);
+    const bounds=layer.getBounds();
+    if(bounds.isValid()) S.inpBounds.extend(bounds);
+    return layer;
+  };
+  addLayer(data.pipes,LG.inp_pipes,"inp_pipes",{
+    style:()=>({color:"#a78bfa",weight:3,opacity:.92}),
+    onEachFeature:(feature,layer)=>{
+      const p=feature.properties||{};
+      layer.bindTooltip(`<div class="tip"><b>Pipe ${escapeHtml(p.id)}</b><br>Ø${escapeHtml(p.diam_mm)} mm · Roughness ${escapeHtml(p.roughness)} · ${escapeHtml(p.status)}</div>`,{sticky:true});
+    },
+  });
+  addLayer(data.valves,LG.inp_valves,"inp_valves",{
+    style:()=>({color:"#f59e0b",weight:4,opacity:.95,dashArray:"5 3"}),
+    onEachFeature:(feature,layer)=>{
+      const p=feature.properties||{};
+      layer.bindTooltip(`<div class="tip"><b>Valve ${escapeHtml(p.id)}</b><br>${escapeHtml(p.valve_type)} · Ø${escapeHtml(p.diam_mm)} mm</div>`,{sticky:true});
+    },
+  });
+  addLayer(data.pumps,LG.inp_pumps,null,{
+    style:()=>({color:"#3dbf72",weight:3.5,opacity:.9}),
+  });
+  const addNodeFeatures=(featureCollection,target,type,shape,color,label)=>{
+    addLayer(featureCollection,target,type,{
+      pointToLayer:(_feature,latlng)=>type==="inp_junctions"
+        ?L.circleMarker(latlng,{radius:5,color:"#f8fafc",weight:1.5,fillColor:color,fillOpacity:.92})
+        :L.marker(latlng,{icon:assetIcon(shape,color)}),
+      onEachFeature:(feature,layer)=>{
+        const p=feature.properties||{};
+        const id=p.id||label;
+        const value=type==="inp_junctions"
+          ?`<br>Elevation ${escapeHtml(p.elevation)} · Demand ${escapeHtml(p.base_demand)}`
+          :type==="inp_reservoirs"
+            ?`<br>Head ${escapeHtml(p.head)}`
+            :`<br>Level ${escapeHtml(p.init_level)} · Max ${escapeHtml(p.max_level)}`;
+        layer.bindTooltip(`<div class="tip"><b>${escapeHtml(label)} ${escapeHtml(id)}</b>${value}</div>`,{sticky:true});
+      },
+    });
+  };
+  addNodeFeatures(data.junctions,LG.inp_nodes,"inp_junctions","circle","#c084fc","Junction");
+  addNodeFeatures(data.reservoirs,LG.inp_reservoirs,"inp_reservoirs","square","#1eb8a0","Reservoir");
+  addNodeFeatures(data.tanks,LG.inp_tanks,"inp_tanks","diamond","#a78bfa","Tank");
+  if(S.inpBounds.isValid()) map.fitBounds(S.inpBounds,{padding:[30,30]});
+  refreshEditorHighlights();
+  setEditorGuide("Click an uploaded-model junction, pipe, valve, reservoir, or tank to stage supported parameter edits.");
+}
+$("model-editor-close").addEventListener("click",()=>$("model-editor").classList.remove("open"));
+$("model-editor-apply").addEventListener("click",stageCurrentModelEdit);
+$("model-editor-reset").addEventListener("click",resetCurrentModelEdit);
+$("model-editor-clear").addEventListener("click",clearModelOverrides);
+
 function renderLayers(d){
   Object.values(LG).forEach(g=>g.clearLayers());
+  S.inpBounds=null;
+  S.editorFeatures.clear();
+  S.editorSelection=null;
+  $("model-editor").classList.remove("open");
 
   // DMA boundary
   L.geoJSON(d.boundary,{style:()=>({color:"#3fc7d6",weight:2,fillOpacity:.04,dashArray:"6 4"})})
@@ -586,40 +1094,46 @@ function renderLayers(d){
       color:f.properties.hw_c>=130?"#3fc7d6":"#7fd9e4",
       weight:Math.max(1.5,Math.min(4,f.properties.diam_mm/40)),opacity:.7,
     }),
-    onEachFeature:(f,l)=>l.bindTooltip(
-      `<div class="tip"><b>Pipe ${f.properties.fid}</b><br>`+
-      `&oslash;${f.properties.diam_mm}mm &bull; ${f.properties.material} &bull; C=${f.properties.hw_c}<br>`+
-      `${f.properties.length_m}m</div>`,{sticky:true})
+    onEachFeature:(f,l)=>{
+      l.bindTooltip(
+        `<div class="tip"><b>Pipe ${f.properties.fid}</b><br>`+
+        `&oslash;${f.properties.diam_mm}mm &bull; ${f.properties.material} &bull; C=${f.properties.hw_c}<br>`+
+        `${f.properties.length_m}m</div>`,{sticky:true});
+      trackEditableFeature(l,f,"pipes");
+    },
   }).addTo(LG.pipes);
 
   // Sources
   (d.sources.features||[]).forEach(f=>{
     const [lon,lat]=f.geometry.coordinates,p=f.properties;
-    L.circleMarker([lat,lon],{radius:9,color:"#071820",weight:2,fillColor:"#7fd9e4",fillOpacity:1})
+    const marker=L.marker([lat,lon],{icon:assetIcon("square","#3dbf72")})
       .bindTooltip(`<div class="tip"><b>${p.name}</b><br>Borehole ${p.elev_m}m ASL<br>Yield: ${p.yield_m3h||"?"}m³/h · Head: ${p.total_head_m}m</div>`,{sticky:true})
       .addTo(LG.sources);
+    trackEditableFeature(marker,f,"sources");
   });
 
   // Tanks
   (d.tanks.features||[]).forEach(f=>{
     const [lon,lat]=f.geometry.coordinates,p=f.properties;
-    L.circleMarker([lat,lon],{radius:9,color:"#071820",weight:2,fillColor:"#7fd9e4",fillOpacity:1})
+    const marker=L.marker([lat,lon],{icon:assetIcon("diamond","#50a0d8")})
       .bindTooltip(`<div class="tip"><b>${p.name}</b><br>Tank ${p.elev_m}m ASL<br>Cap: ${p.cap_m3||"?"}m³ · D: ${p.diameter_m}m</div>`,{sticky:true})
       .addTo(LG.tanks);
+    trackEditableFeature(marker,f,"tanks");
   });
 
   // Valves
   (d.valves.features||[]).forEach(f=>{
     const [lon,lat]=f.geometry.coordinates,p=f.properties;
-    L.circleMarker([lat,lon],{radius:4,color:"#071820",weight:1.5,fillColor:p.is_isolation?"#7fd9e4":"#bfc0c8",fillOpacity:.9})
+    const marker=L.marker([lat,lon],{icon:assetIcon("triangle",p.is_isolation?"#e09a2a":"#9aa7b2")})
       .bindTooltip(`<div class="tip">${p.valve_type}<br>&oslash;${p.diam_mm}mm</div>`,{sticky:true})
       .addTo(LG.valves);
+    if(p.is_isolation) trackEditableFeature(marker,f,"valves");
   });
 
   // Bulk meters
   (d.bulk_meters.features||[]).forEach(f=>{
     const [lon,lat]=f.geometry.coordinates;
-    L.circleMarker([lat,lon],{radius:8,color:"#071820",weight:2,fillColor:"#7fd9e4",fillOpacity:1})
+    L.marker([lat,lon],{icon:assetIcon("meter","#c070e0")})
       .bindTooltip(`<div class="tip"><b>Bulk Meter</b><br>${f.properties.name}</div>`,{sticky:true})
       .addTo(LG.bulk_meters);
   });
@@ -635,23 +1149,34 @@ function renderLayers(d){
     <div class="stat"><div class="v">${st.valve_count}</div><div class="l">Valves</div></div>
     <div class="stat"><div class="v">${st.bulk_meter_count}</div><div class="l">Bulk meters</div></div>
     <div class="stat"><div class="v">${(st.total_pipe_length_m/1000).toFixed(2)}</div><div class="l">km pipes</div></div>`;
-
-  buildLayerToggles(d);
+  refreshEditorHighlights();
+  updateModelEditorStatus();
 }
 
 function buildLayerToggles(d){
   const defs=[
     {id:"boundary",label:"DMA boundary",count:"1 polygon",color:"var(--cyan)"},
     {id:"pipes",label:"Distribution pipes",count:d.stats.pipe_count,color:"var(--cyan)"},
-    {id:"sources",label:"Water sources",count:d.stats.source_count,color:"#7fd9e4"},
-    {id:"tanks",label:"Storage tanks",count:d.stats.tank_count,color:"#7fd9e4"},
-    {id:"valves",label:"Valves",count:d.stats.valve_count,color:"#7fd9e4"},
-    {id:"bulk_meters",label:"Bulk meters",count:d.stats.bulk_meter_count,color:"#7fd9e4"},
-    {id:"connectors",label:"Connectors (synthetic)",count:"–",color:"var(--cyan)"},
+    {id:"sources",label:"Water sources",count:d.stats.source_count,color:"#3dbf72"},
+    {id:"tanks",label:"Storage tanks",count:d.stats.tank_count,color:"#50a0d8"},
+    {id:"valves",label:"Valves",count:d.stats.valve_count,color:"#e09a2a"},
+    {id:"bulk_meters",label:"Bulk meters",count:d.stats.bulk_meter_count,color:"#c070e0"},
+    {id:"connectors",label:"Connectors (synthetic)",count:"–",color:"#d879ed"},
     {id:"sim_nodes",label:"Pressure results",count:"–",color:"var(--amber)"},
     {id:"hotspots",label:"Leakage hotspots",count:"–",color:"var(--red)"},
     {id:"leaks",label:"Reported issues",count:d.stats.reported_leak_count ?? 0,color:"var(--red)"},
   ];
+  if(S.inpFilename&&S.inpCoordinatesAreLonLat){
+    const stats=S.inpElementStats||{};
+    defs.push(
+      {id:"inp_pipes",label:"Uploaded-model pipes",count:stats.pipe_count||0,color:"#a78bfa"},
+      {id:"inp_pumps",label:"Uploaded-model pumps",count:stats.pump_count||0,color:"#3dbf72"},
+      {id:"inp_valves",label:"Uploaded-model valves",count:stats.valve_count||0,color:"#f59e0b"},
+      {id:"inp_nodes",label:"Uploaded-model junctions",count:stats.junction_count||0,color:"#c084fc"},
+      {id:"inp_reservoirs",label:"Uploaded-model reservoirs",count:stats.reservoir_count||0,color:"#1eb8a0"},
+      {id:"inp_tanks",label:"Uploaded-model tanks",count:stats.tank_count||0,color:"#a78bfa"},
+    );
+  }
   $("layer-toggles").innerHTML=defs.map(d=>`
     <div class="layer-row">
       <div class="layer-swatch" style="background:${d.color}"></div>
@@ -681,7 +1206,14 @@ function buildToolbar(){
       <div class="mbtool" id="mb-heat">HEAT MAP</div>
     </div>
     <div class="mbtool-group" id="heat-mode-controls"></div>`;
-  $("mb-fit").onclick=()=>{try{map.fitBounds(LG.pipes.getLayers()[0]?.getBounds()||LG.boundary.getLayers()[0]?.getBounds(),{padding:[20,20]});}catch(e){}};
+  $("mb-fit").onclick=()=>{
+    try{
+      const bounds=S.inpFilename&&S.inpBounds?.isValid()
+        ?S.inpBounds
+        :LG.pipes.getLayers()[0]?.getBounds()||LG.boundary.getLayers()[0]?.getBounds();
+      if(bounds) map.fitBounds(bounds,{padding:[20,20]});
+    }catch(e){}
+  };
   $("mb-pipes").onclick=()=>{S.mapView="normal";syncHeatControls();showOnlyLayer("pipes");};
   $("mb-pressure").onclick=()=>{S.mapView="normal";syncHeatControls();showOnlyLayer("sim_nodes");};
   $("mb-risk").onclick=()=>{S.mapView="normal";syncHeatControls();showOnlyLayer("hotspots");};
@@ -969,6 +1501,20 @@ function setRunButtonBusy(busy){
   }
 }
 
+function serializeModelOverrides(){
+  const overrides={};
+  if(S.inpFilename){
+    for(const [kind,edits] of Object.entries(S.inpOverrides)){
+      if(edits.size) overrides[`inp_${kind}`]=Object.fromEntries(edits);
+    }
+  }else{
+    for(const [kind,edits] of Object.entries(S.gisOverrides)){
+      if(edits.size) overrides[kind]=Object.fromEntries(edits);
+    }
+  }
+  return Object.keys(overrides).length?overrides:undefined;
+}
+
 $("btn-run").addEventListener("click",async()=>{
   if(!S.file) return;
   err("err-sim",null);
@@ -986,10 +1532,23 @@ $("btn-run").addEventListener("click",async()=>{
       zone_name:S.zoneName||undefined,
       leak_reports:S.leakReports.length?S.leakReports:undefined,
     };
+    const overrides=serializeModelOverrides();
+    if(overrides) body.overrides=overrides;
     const resp=await api(`/dma/${encodeURIComponent(S.file)}/simulate`,{method:"POST",body:JSON.stringify(body)});
     S.scenarioId=resp.id;
+    S.detailScenarioId=null;
+    S.detailTimeseries=null;
+    S.detailTanks=null;
+    S.detailReport=null;
+    S.detailTableStep=null;
+    S.nodeTablePage=0;
+    S.pipeTablePage=0;
+    S.resultLeakage=null;
+    $("btn-view-details").disabled=true;
     if(S.integrated) $("sim-name").value=generateIntegratedScenarioName();
-    statusBar("sim-status","running","queued — scenario #"+resp.id);
+    const editedCount=Object.values(S.gisOverrides).reduce((count,edits)=>count+edits.size,0)
+      +Object.values(S.inpOverrides).reduce((count,edits)=>count+edits.size,0);
+    statusBar("sim-status","running",`${S.inpFilename?"uploaded .inp":"GIS-built model"}${editedCount?` with ${editedCount} edited element${editedCount===1?"":"s"}`:""} queued — scenario #${resp.id}`);
 
     // Show synthetic connectors
     const tr=resp.topology_repair||{};
@@ -997,7 +1556,7 @@ $("btn-run").addEventListener("click",async()=>{
     if(tr.connectors_added>0 && tr.connectors_geojson){
       LG.connectors.clearLayers();
       L.geoJSON(tr.connectors_geojson,{
-        style:()=>({color:"#3fc7d6",weight:2.5,dashArray:"6 4",opacity:.85}),
+        style:()=>({color:"#d879ed",weight:2.5,dashArray:"6 4",opacity:.95}),
         onEachFeature:(f,l)=>l.bindTooltip(`<div class="tip">${f.properties.id}<br>${f.properties.length_m}m synthetic connector</div>`,{sticky:true})
       }).addTo(LG.connectors);
       $("lc-connectors").textContent=tr.connectors_added;
@@ -1011,7 +1570,7 @@ $("btn-run").addEventListener("click",async()=>{
     S.pollTimer=setInterval(poll,2500); poll();
   }catch(e){
     setRunButtonBusy(false);
-    err("err-sim","An error occurred while starting the hydraulic simulation.");
+    err("err-sim",e.message||"An error occurred while starting the hydraulic simulation.");
   }
 });
 
@@ -1027,8 +1586,14 @@ async function poll(){
       statusBar("sim-status","done","complete — loading results…");
       renderSummary(d.summary||{});
       await loadResults(0);
-      const lr=await api(`/dma/${encodeURIComponent(S.file)}/simulate/${S.scenarioId}/leakage`);
-      renderLeakage(lr);
+      $("btn-view-details").disabled=false;
+      try{
+        const lr=await api(`/dma/${encodeURIComponent(S.file)}/simulate/${S.scenarioId}/leakage`);
+        renderLeakage(lr);
+      }catch(leakageError){
+        S.resultLeakage=null;
+        err("err-sim","Simulation completed, but leakage analysis could not be loaded.");
+      }
       tab("results");
     } else {
       clearInterval(S.pollTimer);
@@ -1043,6 +1608,7 @@ async function poll(){
 }
 
 function renderSummary(s){
+  S.lastSummary=s;
   const c=v=>v>45?"red":v<7?"green":"";
   $("res-summary").innerHTML=`
     <div class="stat"><div class="v ${c(s.pressure_avg_m)}">${s.pressure_avg_m??"-"}</div><div class="l">Avg Pres. m</div></div>
@@ -1058,6 +1624,9 @@ function renderSummary(s){
 
 async function loadResults(step){
   LG.sim_nodes.clearLayers();
+  S.resultNodesGeojson=null;
+  S.resultPipesGeojson=null;
+  if($("detail-modal-overlay").classList.contains("open")) renderElementTables();
   try{
     const [nj,pj]=await Promise.all([
       api(`/simulate/${S.scenarioId}/geojson/nodes?time_step=${step}`),
@@ -1065,7 +1634,8 @@ async function loadResults(step){
     ]);
     S.resultNodesGeojson=nj;
     S.resultPipesGeojson=pj;
-    nj.features.forEach(f=>{
+    if($("detail-modal-overlay").classList.contains("open")) renderElementTables();
+    if(!S.inpFilename||S.inpCoordinatesAreLonLat) nj.features.forEach(f=>{
       if(!f.geometry) return;
       const [lon,lat]=f.geometry.coordinates, p=f.properties;
       const col=p.is_low_pressure?"#4dbf82":p.pressure>45?"#e05248":p.pressure>30?"#e09c35":"#3fc7d6";
@@ -1080,8 +1650,10 @@ async function loadResults(step){
 }
 
 $("time-slider").addEventListener("change",e=>{
-  $("time-val").textContent=e.target.value+"h";
-  if(S.scenarioId) loadResults(parseInt(e.target.value));
+  const step=parseInt(e.target.value);
+  const hour=step*(S.lastSummary?.time_step_min||60)/60;
+  $("time-val").textContent=`${hour.toFixed(hour%1?1:0)}h`;
+  if(S.scenarioId) loadResults(step);
 });
 
 function renderLeakage(d){
@@ -1154,13 +1726,285 @@ function renderLeakage(d){
   else map.addLayer(LG.hotspots);
 }
 
-function drawChart(balance){
-  const cv=$("balance-chart");
-  if(!cv||!balance.length) return;
+function escapeHtml(value){
+  return String(value??"").replace(/[&<>"']/g,char=>({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  })[char]);
+}
+
+function detailStat(label,value,unit=""){
+  const shown=value===null||value===undefined||value===""?"Unavailable":`${escapeHtml(value)}${unit}`;
+  return `<div class="stat"><div class="v">${shown}</div><div class="l">${escapeHtml(label)}</div></div>`;
+}
+
+function drawLineChart(canvasId,rows,lines){
+  const cv=$(canvasId);
+  if(!cv) return;
   const ctx=cv.getContext("2d");
-  cv.width=cv.offsetWidth||360; cv.height=130;
+  const W=cv.width=cv.offsetWidth||480,H=cv.height=180,pad={t:14,r:12,b:26,l:46};
+  ctx.fillStyle="#080e12";ctx.fillRect(0,0,W,H);
+  const chartValue=(row,key)=>{
+    if(row[key]===null||row[key]===undefined||row[key]==="") return null;
+    const value=Number(row[key]);
+    return Number.isFinite(value)?value:null;
+  };
+  const values=rows.flatMap(row=>lines.map(line=>chartValue(row,line.key))).filter(value=>value!==null);
+  if(!values.length){
+    ctx.fillStyle="#7591a0";ctx.font="11px monospace";ctx.fillText("No timestep data available",pad.l,H/2);
+    return;
+  }
+  let min=Math.min(...values),max=Math.max(...values);
+  if(min===max){const delta=Math.abs(min)*.05||1;min-=delta;max+=delta;}
+  const sx=i=>pad.l+(i/(rows.length-1||1))*(W-pad.l-pad.r);
+  const sy=value=>pad.t+(1-(value-min)/(max-min))*(H-pad.t-pad.b);
+  [.25,.5,.75,1].forEach(f=>{
+    const y=pad.t+(1-f)*(H-pad.t-pad.b);
+    ctx.strokeStyle="#1e2e36";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(W-pad.r,y);ctx.stroke();
+    ctx.fillStyle="#7591a0";ctx.font="9px monospace";ctx.fillText((min+f*(max-min)).toPrecision(3),2,y+3);
+  });
+  lines.forEach(line=>{
+    ctx.beginPath();ctx.strokeStyle=line.color;ctx.lineWidth=1.8;
+    let started=false;
+    rows.forEach((row,index)=>{
+      const value=chartValue(row,line.key);
+      if(value===null){started=false;return;}
+      if(!started){ctx.moveTo(sx(index),sy(value));started=true;}
+      else ctx.lineTo(sx(index),sy(value));
+    });
+    ctx.stroke();
+  });
+  ctx.fillStyle="#7591a0";ctx.font="9px monospace";
+  const labelIndices=[...new Set([0,Math.floor((rows.length-1)/2),rows.length-1])];
+  labelIndices.forEach(index=>{
+    const hour=Number(rows[index].hour);
+    ctx.fillText(`${Number.isFinite(hour)?hour.toFixed(hour%1?1:0):rows[index].time_step}h`,sx(index)-10,H-7);
+  });
+  let legendX=pad.l;
+  lines.forEach(line=>{
+    ctx.fillStyle=line.color;ctx.fillRect(legendX,H-19,12,2);
+    ctx.fillStyle="#7591a0";ctx.fillText(line.label,legendX+16,H-16);
+    legendX+=ctx.measureText(line.label).width+30;
+  });
+}
+
+function renderDetailedResults(reportSummary){
+  const s=S.lastSummary||{};
+  const artifacts=s.hydraulic_report_artifacts||{};
+  const report=reportSummary||{};
+  const balance=report.flow_balance||artifacts.hydraulic_balance||artifacts.flow_balance;
+  const leakage=S.resultLeakage||{};
+  const nrw=leakage.nrw||{};
+
+  $("detail-summary").innerHTML=[
+    detailStat("Average pressure",s.pressure_avg_m," m"),
+    detailStat("Minimum pressure",s.pressure_min_m," m"),
+    detailStat("Maximum pressure",s.pressure_max_m," m"),
+    detailStat("Low-pressure node readings",s.low_pressure_nodes),
+    detailStat("Average water age",s.water_age_avg_hrs," h"),
+    detailStat("Maximum water age",s.water_age_max_hrs," h"),
+    detailStat("Mean pipe flow",s.flow_avg_m3s," m³/s"),
+    detailStat("Maximum pipe flow",s.flow_max_m3s," m³/s"),
+    detailStat("Average total demand",s.total_demand_m3h," m³/h"),
+    detailStat("Pipe count",s.total_pipes),
+    detailStat("Timestep count",s.time_steps),
+    detailStat("Demand model",s.demand_model),
+    detailStat("Scenario type",s.scenario_type),
+  ].join("");
+
+  $("detail-nrw").innerHTML=[
+    detailStat("NRW",balance?.nrw_pct??nrw.nrw_pct,"%"),
+    detailStat("NRW flow",balance?.nrw_m3h??nrw.nrw_m3h," m³/h"),
+    detailStat("Total inflow",balance?.total_inflow_m3h??nrw.system_input_m3h," m³/h"),
+    detailStat("Consumer demand",balance?.consumer_demand_m3h??nrw.authorised_m3h," m³/h"),
+    detailStat("Demand deficit",balance?.demand_deficit_m3h," m³/h"),
+    detailStat("Leakage flow",balance?.leakage_flow_m3h??nrw.real_loss_m3h," m³/h"),
+    detailStat("Storage flow",balance?.storage_flow_m3h," m³/h"),
+    detailStat("Flow ratio",balance?.flow_ratio),
+    detailStat("ILI",nrw.ili),
+  ].join("");
+
+  const zones=leakage.pressure_zones||[];
+  $("detail-pressure-zones").innerHTML=zones.length?zones.map(zone=>
+    `<div class="risk-item"><div class="risk-header"><span class="risk-badge ${escapeHtml(zone.zone)}">${escapeHtml(zone.zone)}</span><span>${escapeHtml(zone.count)} nodes</span><span>${escapeHtml(zone.pct)}%</span></div></div>`
+  ).join(""):'<div class="detail-note">Pressure-zone breakdown unavailable.</div>';
+
+  const risks=leakage.pipe_risks_top20||[];
+  $("detail-risks").innerHTML=risks.length?risks.map(risk=>
+    `<div class="risk-item"><div class="risk-header"><span class="risk-badge ${escapeHtml(risk.risk_level)}">${escapeHtml(risk.risk_level)}</span><span class="risk-pid">${escapeHtml(risk.pipe_id)}</span><span>${Number.isFinite(Number(risk.risk_score))?(Number(risk.risk_score)*100).toFixed(0)+"%":"—"}</span></div><div class="risk-drivers">${(risk.drivers||[]).map(escapeHtml).join(" · ")}</div></div>`
+  ).join(""):'<div class="detail-note">No pipe-risk results available.</div>';
+
+  const tanks=S.detailTanks?.tanks||[];
+  $("detail-tanks").innerHTML=tanks.length?tanks.map((tank,index)=>{
+    const series=tank.series||[];
+    const volumes=series.map(point=>Number(point.volume_m3)).filter(Number.isFinite);
+    const summary=volumes.length?`min ${Math.min(...volumes).toFixed(2)} · max ${Math.max(...volumes).toFixed(2)} m³`:"Volume values unavailable";
+    return `<div class="detail-section"><div class="detail-note"><b>${escapeHtml(tank.tank_id)}</b> — ${summary}</div><canvas id="detail-tank-${index}" class="detail-chart" height="180"></canvas></div>`;
+  }).join(""):'<div class="detail-note">No tank-volume readings were returned for this simulation.</div>';
+  tanks.forEach((tank,index)=>drawLineChart(`detail-tank-${index}`,tank.series||[],[
+    {key:"volume_m3",label:"Volume (m³)",color:"#3fc7d6"},
+  ]));
+
+  const warnings=[...(leakage.warnings||[]),...(report.warnings||artifacts.warnings||s.warnings||[])];
+  $("detail-warnings").innerHTML=warnings.length
+    ?warnings.map(w=>`<div class="alert-box warn" style="margin-top:6px">${escapeHtml(w)}</div>`).join("")
+    :'<div class="detail-note">No warnings were reported.</div>';
+
+  const events=report.status_events||artifacts.status_events||[];
+  $("detail-status-events").innerHTML=events.length
+    ?`<div class="detail-note">Hydraulic status events (${escapeHtml(events.length)})</div>`+events.map(event=>
+      `<div class="alert-box info" style="margin-top:5px">${escapeHtml(event.time||"")} ${escapeHtml(event.message||"")}</div>`
+    ).join("")
+    :'<div class="detail-note">No hydraulic status events were reported.</div>';
+
+  const reportAvailable=Boolean(s.report_available);
+  const balanceState=report.balanced??artifacts.balanced;
+  const massRatio=report.mass_ratio??artifacts.mass_ratio;
+  const statusEventCount=artifacts.status_event_count??(report.status_events||artifacts.status_events||[]).length;
+  $("detail-report-status").innerHTML=`<div class="detail-note">Report file: ${reportAvailable?"available for viewing and download":"not available for this simulation"}${balanceState===undefined?"":" · Hydraulic balance: "+(balanceState?"balanced":"unbalanced")}${massRatio==null?"":" · Mass ratio: "+escapeHtml(massRatio)} · Status events: ${escapeHtml(statusEventCount)}</div>`;
+  $("btn-download-report").style.display=reportAvailable?"inline-flex":"none";
+  $("btn-toggle-raw-report").style.display=reportAvailable?"inline-flex":"none";
+
+  const rows=S.detailTimeseries?.pressure||[];
+  drawLineChart("detail-pressure-chart",rows,[
+    {key:"pressure_min_m",label:"Min",color:"#e05248"},
+    {key:"pressure_avg_m",label:"Average",color:"#3fc7d6"},
+    {key:"pressure_max_m",label:"Max",color:"#e09c35"},
+  ]);
+  drawLineChart("detail-age-chart",rows,[
+    {key:"water_age_avg_hrs",label:"Average age",color:"#3fc7d6"},
+    {key:"water_age_max_hrs",label:"Maximum age",color:"#e09c35"},
+  ]);
+  drawLineChart("detail-demand-chart",rows,[
+    {key:"total_demand_m3h",label:"Demand",color:"#4dbf82"},
+  ]);
+  drawLineChart("detail-flow-chart",S.detailTimeseries?.pipe_flow||[],[
+    {key:"flow_avg_m3s",label:"Average",color:"#3fc7d6"},
+    {key:"flow_max_abs_m3s",label:"Maximum",color:"#e09c35"},
+  ]);
+  drawChart(leakage.timestep_balance||[],"detail-balance-chart");
+  renderElementTables();
+}
+
+function displayNumber(value,digits=3){
+  if(value===null||value===undefined||value==="") return "—";
+  const number=Number(value);
+  return Number.isFinite(number)?number.toFixed(digits):"—";
+}
+
+function renderElementTables(){
+  const step=Number($("time-slider").value||0);
+  if(S.detailTableStep!==step){
+    S.detailTableStep=step;
+    S.nodeTablePage=0;
+    S.pipeTablePage=0;
+  }
+  const hour=step*(S.lastSummary?.time_step_min||60)/60;
+  const label=`Selected timestep ${step} (${hour.toFixed(hour%1?1:0)} h).`;
+  const pageSize=100;
+  const pager=(kind,page,total)=>{
+    const pages=Math.ceil(total/pageSize);
+    return pages<2?"":`<div class="detail-modal-actions"><button class="btn sm" type="button" data-table-page="${kind}-prev" ${page===0?"disabled":""}>Previous</button><span class="detail-note">Page ${page+1} of ${pages}</span><button class="btn sm" type="button" data-table-page="${kind}-next" ${page+1>=pages?"disabled":""}>Next</button></div>`;
+  };
+  const nodes=S.resultNodesGeojson?.features||[];
+  const nodeStart=S.nodeTablePage*pageSize;
+  $("detail-node-table").innerHTML=nodes.length
+    ?`<div class="detail-note">${label} Showing ${nodeStart+1}–${Math.min(nodeStart+pageSize,nodes.length)} of ${nodes.length} node records.</div>${pager("nodes",S.nodeTablePage,nodes.length)}<div class="detail-table-wrap"><table class="detail-table"><thead><tr><th>Node</th><th>Pressure (m)</th><th>Head (m)</th><th>Demand (m³/s)</th><th>Water age (h)</th></tr></thead><tbody>${nodes.slice(nodeStart,nodeStart+pageSize).map(feature=>{
+      const p=feature.properties||{};
+      return `<tr><td>${escapeHtml(p.element_id)}</td><td>${displayNumber(p.pressure)}</td><td>${displayNumber(p.head)}</td><td>${displayNumber(p.demand,6)}</td><td>${displayNumber(p.water_age,2)}</td></tr>`;
+    }).join("")}</tbody></table></div>`
+    :'<div class="detail-note">Node records are not currently loaded.</div>';
+  const pipes=S.resultPipesGeojson?.features||[];
+  const pipeStart=S.pipeTablePage*pageSize;
+  $("detail-pipe-table").innerHTML=pipes.length
+    ?`<div class="detail-note">${label} Showing ${pipeStart+1}–${Math.min(pipeStart+pageSize,pipes.length)} of ${pipes.length} pipe records.</div>${pager("pipes",S.pipeTablePage,pipes.length)}<div class="detail-table-wrap"><table class="detail-table"><thead><tr><th>Pipe</th><th>Flow (m³/s)</th><th>Velocity (m/s)</th><th>Head loss (m)</th></tr></thead><tbody>${pipes.slice(pipeStart,pipeStart+pageSize).map(feature=>{
+      const p=feature.properties||{};
+      return `<tr><td>${escapeHtml(p.element_id)}</td><td>${displayNumber(p.flow_rate,6)}</td><td>${displayNumber(p.velocity)}</td><td>${displayNumber(p.headloss)}</td></tr>`;
+    }).join("")}</tbody></table></div>`
+    :'<div class="detail-note">Pipe records are not currently loaded.</div>';
+}
+
+async function openDetailedResults(){
+  if(!S.scenarioId) return;
+  S.detailTrigger=document.activeElement;
+  $("detail-modal-overlay").classList.add("open");
+  $("detail-modal-overlay").setAttribute("aria-hidden","false");
+  $("btn-close-details").focus();
+  $("detail-modal-subtitle").textContent=`Scenario #${S.scenarioId}`;
+  if(S.detailLoading) return;
+  $("detail-load-status").textContent="Loading detailed result data…";
+  $("detail-raw-report").style.display="none";
+  $("detail-raw-report").textContent="";
+  $("btn-toggle-raw-report").textContent="View full EPANET report";
+
+  if(S.detailScenarioId===S.scenarioId&&S.detailTimeseries&&S.detailTanks){
+    renderDetailedResults(S.detailReport);
+    $("detail-load-status").textContent="Detailed results loaded.";
+    return;
+  }
+  S.detailLoading=true;
+  const prefix=`/dma/${encodeURIComponent(S.file)}/simulate/${S.scenarioId}`;
+  const [timeseries,tanks,report]=await Promise.allSettled([
+    api(`/simulate/${S.scenarioId}/timeseries`),
+    api(`${prefix}/tanks`),
+    api(`/simulate/${S.scenarioId}/report/summary`),
+  ]);
+  S.detailTimeseries=timeseries.status==="fulfilled"?timeseries.value:null;
+  S.detailTanks=tanks.status==="fulfilled"?tanks.value:{tanks:[]};
+  S.detailReport=report.status==="fulfilled"?report.value:null;
+  S.detailScenarioId=S.scenarioId;
+  renderDetailedResults(S.detailReport);
+  const failed=[timeseries,tanks,report].filter(result=>result.status==="rejected").length;
+  $("detail-load-status").textContent=failed
+    ?`Detailed results loaded with ${failed} unavailable data source${failed===1?"":"s"}; the sections below show available data.`
+    :"Detailed results loaded.";
+  S.detailLoading=false;
+}
+
+function closeDetailedResults(){
+  $("detail-modal-overlay").classList.remove("open");
+  $("detail-modal-overlay").setAttribute("aria-hidden","true");
+  if(S.detailTrigger&&typeof S.detailTrigger.focus==="function") S.detailTrigger.focus();
+}
+
+function downloadReport(){
+  apiText(`/simulate/${S.scenarioId}/report`).then(text=>{
+    const link=document.createElement("a");
+    const url=URL.createObjectURL(new Blob([text],{type:"text/plain"}));
+    link.href=url;link.download=`scenario_${S.scenarioId}.rpt`;
+    document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }).catch(error=>{
+    $("detail-load-status").textContent=`Could not download the report: ${error.message}`;
+  });
+}
+
+function toggleRawReport(){
+  const panel=$("detail-raw-report");
+  if(panel.style.display!=="none"){
+    panel.style.display="none";
+    $("btn-toggle-raw-report").textContent="View full EPANET report";
+    return;
+  }
+  $("btn-toggle-raw-report").disabled=true;
+  apiText(`/simulate/${S.scenarioId}/report`).then(text=>{
+    panel.textContent=text;
+    panel.style.display="block";
+    $("btn-toggle-raw-report").textContent="Hide full EPANET report";
+  }).catch(error=>{
+    $("detail-load-status").textContent=`Could not load the report: ${error.message}`;
+  }).finally(()=>{$("btn-toggle-raw-report").disabled=false;});
+}
+
+function drawChart(balance,canvasId="balance-chart"){
+  const cv=$(canvasId);
+  if(!cv) return;
+  const ctx=cv.getContext("2d");
+  cv.width=cv.offsetWidth||360; cv.height=canvasId==="balance-chart"?130:180;
   const W=cv.width,H=cv.height,pad={t:10,r:8,b:22,l:38};
   ctx.fillStyle="#080e12"; ctx.fillRect(0,0,W,H);
+  if(!balance.length){
+    ctx.fillStyle="#7591a0";ctx.font="11px monospace";ctx.fillText("No flow-balance time series available",pad.l,H/2);
+    return;
+  }
   const max=Math.max(...balance.map(b=>b.inflow_m3h),1);
   const sx=i=>pad.l+(i/(balance.length-1||1))*(W-pad.l-pad.r);
   const sy=v=>pad.t+(1-v/max)*(H-pad.t-pad.b);
@@ -1186,13 +2030,44 @@ function drawChart(balance){
   ctx.closePath(); ctx.fill();
   // X labels
   ctx.fillStyle="#3d5560"; ctx.font="9px monospace";
-  balance.filter((_,i)=>i%4===0).forEach(b=>ctx.fillText(b.hour+"h",sx(b.hour)-7,H-6));
+  balance.forEach((b,i)=>{if(i%Math.max(1,Math.ceil(balance.length/6))===0)ctx.fillText(b.hour+"h",sx(i)-7,H-6);});
   // Legend
-  ctx.fillStyle="#3fc7d6"; ctx.fillRect(W-70,H-20,14,2);
-  ctx.fillStyle="#7591a0"; ctx.font="9px monospace"; ctx.fillText("Inflow",W-52,H-17);
-  ctx.fillStyle="#4dbf82"; ctx.fillRect(W-70,H-10,14,2);
-  ctx.fillStyle="#7591a0"; ctx.fillText("Demand",W-52,H-7);
+  ctx.fillStyle="#3fc7d6"; ctx.fillRect(W-116,H-20,14,2);
+  ctx.fillStyle="#7591a0"; ctx.font="9px monospace"; ctx.fillText("Inflow",W-98,H-17);
+  ctx.fillStyle="#4dbf82"; ctx.fillRect(W-116,H-10,14,2);
+  ctx.fillStyle="#7591a0"; ctx.fillText("Demand",W-98,H-7);
 }
+
+$("btn-view-details").addEventListener("click",openDetailedResults);
+$("btn-close-details").addEventListener("click",closeDetailedResults);
+$("detail-modal-overlay").addEventListener("click",event=>{
+  if(event.target===$("detail-modal-overlay")) closeDetailedResults();
+});
+$("btn-download-report").addEventListener("click",downloadReport);
+$("btn-toggle-raw-report").addEventListener("click",toggleRawReport);
+$("detail-modal-body").addEventListener("click",event=>{
+  const button=event.target.closest("[data-table-page]");
+  if(!button||button.disabled) return;
+  const [kind,direction]=button.dataset.tablePage.split("-");
+  const pageKey=kind==="nodes"?"nodeTablePage":"pipeTablePage";
+  S[pageKey]=Math.max(0,S[pageKey]+(direction==="next"?1:-1));
+  renderElementTables();
+});
+document.addEventListener("keydown",event=>{
+  if(!$("detail-modal-overlay").classList.contains("open")) return;
+  if(event.key==="Escape"){
+    closeDetailedResults();
+  }else if(event.key==="Tab"){
+    const focusable=[...$("detail-modal-overlay").querySelectorAll("button:not([disabled]),a[href],input:not([disabled]),[tabindex]:not([tabindex='-1'])")];
+    if(!focusable.length) return;
+    const first=focusable[0],last=focusable[focusable.length-1];
+    if(event.shiftKey&&document.activeElement===first){
+      event.preventDefault();last.focus();
+    }else if(!event.shiftKey&&document.activeElement===last){
+      event.preventDefault();first.focus();
+    }
+  }
+});
 
 })();
 </script>

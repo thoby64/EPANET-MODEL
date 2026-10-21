@@ -27,6 +27,9 @@ services:
       # - /srv/duwasa/gpkg:/data/gpkg:ro
       - gpkg_data:/data/gpkg
 
+      # ── Temporary uploaded EPANET input files ────────────────────────────
+      - inp_data:/data/inp
+
       # ── SQLite simulation database ────────────────────────────────────────
       - db_data:/data/db
 
@@ -55,5 +58,7 @@ volumes:
     #   type: none
     #   o: bind
     #   device: /path/on/host
+  inp_data:
+    driver: local
   db_data:
     driver: local

@@ -25,6 +25,8 @@ class SimScenario(Base):
 
     id:            Mapped[int]           = mapped_column(Integer, primary_key=True, index=True)
     gpkg_filename: Mapped[str]           = mapped_column(String(256), nullable=False)
+    input_type:    Mapped[str]           = mapped_column(String(8), default="gpkg")
+    input_filename: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
     name:          Mapped[str]           = mapped_column(String(128), default="Unnamed")
     description:   Mapped[Optional[str]] = mapped_column(Text,      nullable=True)
 
@@ -93,5 +95,6 @@ class SimResult(Base):
     velocity:         Mapped[Optional[float]] = mapped_column(Float,   nullable=True)
     headloss:         Mapped[Optional[float]] = mapped_column(Float,   nullable=True)
     is_high_velocity: Mapped[bool]            = mapped_column(Boolean, default=False)
+    volume_m3:        Mapped[Optional[float]] = mapped_column(Float,   nullable=True)
 
     scenario: Mapped["SimScenario"] = relationship("SimScenario", back_populates="results")
