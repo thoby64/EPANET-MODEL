@@ -18,9 +18,9 @@ services:
       - key: DATABASE_URL
         value: sqlite+aiosqlite:////data/db/epanet_service.db
       - key: MAJISCOPE_BACKEND_URL
-        value: https://full-nfjr.onrender.com
+        value: https://latest-majiscope-backend.onrender.com
       - key: MAJISCOPE_RETURN_URL
-        value: https://majiscope-2wzv.onrender.com/dashboard
+        value: https://latest-majiscope.onrender.com/dashboard
       - key: MAJISCOPE_LAUNCH_SECRET
         sync: false
       - key: MAJISCOPE_CALLBACK_SECRET
