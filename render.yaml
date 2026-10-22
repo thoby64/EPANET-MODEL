@@ -23,6 +23,10 @@ services:
         value: /data/inp
       - key: DATABASE_URL
         value: sqlite+aiosqlite:////data/db/epanet_service.db
+      # EPANET .rpt files must also live on the persistent disk, otherwise
+      # they are wiped on every deploy/restart.
+      - key: REPORTS_DIR
+        value: /data/reports
       - key: MAJISCOPE_BACKEND_URL
         value: https://latest-majiscope-backend.onrender.com
       - key: MAJISCOPE_RETURN_URL

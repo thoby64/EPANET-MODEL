@@ -12,3 +12,5 @@ pydantic-settings==2.2.1
 httpx==0.27.0
 pytest==8.2.0
 pytest-asyncio==0.23.6
+# static check for undefined names (guarded by tests/test_lint.py)
+pyflakes==3.2.0

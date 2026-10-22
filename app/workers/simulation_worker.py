@@ -34,11 +34,15 @@ Pipeline
 6. Mark DONE or FAILED; clean up temp .inp file.
 """
 
+import json
 import logging
 import math
 import os
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Dict, Optional
+
+from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.core.database import get_session
@@ -46,7 +50,8 @@ from app.core.scenario_types import ALL_SCENARIO_TYPES, RANDOM_LEAKS_ALLOWED_FOR
 from app.core.tz import utc_isoformat
 from app.models.simulation import SimResult, SimScenario
 from app.services.leak_report import compute_service_impact, recommend_isolation
-from app.services.rpt_parser import parse_rpt, rpt_nrw_summary
+from app.services.leakage_report import analyse_leakage
+from app.services.rpt_parser import parse_rpt, persisted_report_path, rpt_nrw_summary
 from app.services.simulation_service import run_simulation
 
 logger = logging.getLogger(__name__)
