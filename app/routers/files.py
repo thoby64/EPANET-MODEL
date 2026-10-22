@@ -27,6 +27,7 @@ _EXPECTED_LAYERS  = {"dma", "waterpipes", "watersources", "storagefacility", "va
 class GpkgFileInfo(BaseModel):
     filename:          str
     size_kb:           float
+    layer:             str = "unknown"
     layers:            List[str]
     missing_layers:    List[str]
     has_dma_structure: bool
@@ -78,6 +79,7 @@ def list_files(auth_context: str = Depends(require_api_key)):
         result.append(GpkgFileInfo(
             filename          = fname,
             size_kb           = size_kb,
+            layer             = layers[0] if layers else "unknown",
             layers            = layers,
             missing_layers    = missing,
             has_dma_structure = has_structure,

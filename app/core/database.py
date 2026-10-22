@@ -80,19 +80,43 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
         await _ensure_sim_scenarios_columns(conn)
         await _ensure_sim_results_columns(conn)
+        await _migrate_scenario_contract(conn)
+
+
+async def _migrate_scenario_contract(conn) -> None:
+    """Bring stored scenarios in line with the scenario_type contract.
+
+    Random/synthetic leak injection (`leakage_frac`) is now research-only.
+    Rows written before that rule existed carry the old 0.20 default on
+    ordinary runs, which the worker now rejects. Clear it for every scenario
+    that is not a research run so those scenarios stay runnable.
+    """
+    await conn.execute(
+        text(
+            "UPDATE sim_scenarios SET leakage_frac = 0.0 "
+            "WHERE leakage_frac > 0 AND (scenario_type IS NULL OR scenario_type != 'research')"
+        )
+    )
 
 
 async def _ensure_sim_scenarios_columns(conn) -> None:
     result   = await conn.execute(text("PRAGMA table_info(sim_scenarios)"))
     existing = {row[1] for row in result.fetchall()}
-    # leakage_frac was added when the DMA workflow replaced the whole-network one
+    # Columns added over the life of the service. SQLite's create_all never
+    # alters an existing table, so a pre-existing database needs this patch.
     additions = {
-        "leakage_frac": "FLOAT DEFAULT 0.20",
+        "leakage_frac": "FLOAT DEFAULT 0.00",
         "scenario_type": "VARCHAR(24) DEFAULT 'baseline'",
-        "demand_model": "VARCHAR(12) DEFAULT 'DDA'",
-        "pda_pressure_min": "FLOAT",
-        "pda_pressure_required": "FLOAT",
-        "pda_pressure_exponent": "FLOAT",
+        "demand_model": "VARCHAR(8) DEFAULT 'DDA'",
+        "pda_pressure_min": "FLOAT DEFAULT 0.0",
+        "pda_pressure_required": "FLOAT DEFAULT 0.1",
+        "pda_pressure_exponent": "FLOAT DEFAULT 0.5",
+        "pipe_status": "VARCHAR(32) DEFAULT 'OPERATIONAL'",
+        "reservoir_head": "FLOAT DEFAULT 50.0",
+        "pipe_ids": "JSON",
+        "reservoir_lat": "FLOAT",
+        "reservoir_lon": "FLOAT",
+        "snap_tolerance_m": "FLOAT DEFAULT 2.0",
         "majiscope_snapshot_payload": "JSON",
         "majiscope_snapshot_status": "VARCHAR(20)",
         "majiscope_snapshot_attempts": "INTEGER DEFAULT 0",

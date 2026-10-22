@@ -63,7 +63,7 @@ def require_api_key(
     if metadata:
         path = request.url.path
         filename = str(metadata.get("filename") or "")
-        if path.startswith("/files/upload") or request.method == "DELETE":
+        if path.startswith("/files/upload") or path.startswith("/inp/upload") or request.method == "DELETE":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="MajiScope launch tokens cannot upload or delete hydraulic service data.",

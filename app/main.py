@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from app.core.config import get_settings
 from app.core.database import ensure_storage_paths, init_db
 from app.core.tz import install_utc_datetime_serialization
-from app.routers import dma, files, majiscope, simulation, upload
+from app.routers import dma, files, inp, majiscope, simulation, upload
 
 install_utc_datetime_serialization()
 
@@ -29,31 +29,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def _prepared_model_count(settings) -> int:
-    """Number of prepared GeoPackage models currently on disk."""
-    try:
-        gpkg_dir = Path(settings.gpkg_dir)
-        if not gpkg_dir.is_dir():
-            return 0
-        return sum(1 for item in gpkg_dir.glob("*.gpkg") if item.is_file())
-    except Exception:
-        return 0
-
-
 def _render_status_page(settings) -> str:
-    """Small self-contained status page served at the service root."""
-    model_count = _prepared_model_count(settings)
-    endpoints = (
-        ("/app", "Hydraulic model workspace"),
-        ("/health", "JSON health probe"),
-        ("/docs", "Interactive API documentation"),
-        ("/files", "Prepared model files (API key required)"),
-        ("/majiscope/prepare-gpkg", "MajiScope model preparation (API key required)"),
-    )
-    rows = "".join(
-        f'<tr><td><a href="{path}">{path}</a></td><td>{description}</td></tr>'
-        for path, description in endpoints
-    )
+    """Minimal status page served at the service root.
+
+    It only confirms the service is live and links to the hydraulic model
+    workspace — the API surface stays out of the way.
+    """
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -70,8 +51,9 @@ def _render_status_page(settings) -> str:
     background: #0f172a; color: #e2e8f0;
   }}
   .card {{
-    width: 100%; max-width: 34rem; background: #1e293b; border: 1px solid #334155;
-    border-radius: 1rem; padding: 2rem; box-shadow: 0 24px 60px rgba(0,0,0,.45);
+    width: 100%; max-width: 26rem; text-align: center;
+    background: #1e293b; border: 1px solid #334155;
+    border-radius: 1rem; padding: 2.5rem 2rem; box-shadow: 0 24px 60px rgba(0,0,0,.45);
   }}
   .badge {{
     display: inline-flex; align-items: center; gap: .5rem;
@@ -80,22 +62,14 @@ def _render_status_page(settings) -> str:
     letter-spacing: .04em; text-transform: uppercase;
   }}
   .dot {{ width: .5rem; height: .5rem; border-radius: 999px; background: #4ade80; }}
-  h1 {{ margin: 1rem 0 .25rem; font-size: 1.5rem; letter-spacing: -.02em; }}
-  p.sub {{ margin: 0 0 1.5rem; color: #94a3b8; font-size: .95rem; }}
-  .meta {{
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
-    gap: .75rem; margin-bottom: 1.5rem;
+  h1 {{ margin: 1.25rem 0 .35rem; font-size: 1.45rem; letter-spacing: -.02em; }}
+  p.sub {{ margin: 0 0 1.75rem; color: #94a3b8; font-size: .95rem; }}
+  .app-link {{
+    display: inline-block; width: 100%; padding: .85rem 1.25rem;
+    background: linear-gradient(135deg, #0ea5e9, #2563eb); color: #fff;
+    border-radius: .75rem; font-weight: 600; text-decoration: none;
   }}
-  .meta div {{ background: #0f172a; border: 1px solid #334155; border-radius: .75rem; padding: .75rem 1rem; }}
-  .meta span {{ display: block; font-size: .7rem; text-transform: uppercase; letter-spacing: .08em; color: #64748b; }}
-  .meta strong {{ display: block; margin-top: .25rem; font-size: .95rem; }}
-  table {{ width: 100%; border-collapse: collapse; font-size: .9rem; }}
-  th, td {{ text-align: left; padding: .5rem .25rem; border-bottom: 1px solid #334155; }}
-  th {{ font-size: .72rem; text-transform: uppercase; letter-spacing: .07em; color: #64748b; }}
-  td:first-child {{ white-space: nowrap; }}
-  a {{ color: #38bdf8; text-decoration: none; }}
-  a:hover {{ text-decoration: underline; }}
-  footer {{ margin-top: 1.5rem; color: #64748b; font-size: .78rem; }}
+  .app-link:hover {{ filter: brightness(1.08); }}
 </style>
 </head>
 <body>
@@ -103,19 +77,7 @@ def _render_status_page(settings) -> str:
     <span class="badge"><span class="dot"></span>Live</span>
     <h1>{settings.service_name}</h1>
     <p class="sub">The hydraulic simulation service is running and accepting requests.</p>
-
-    <div class="meta">
-      <div><span>Status</span><strong>Online</strong></div>
-      <div><span>Version</span><strong>{settings.service_version}</strong></div>
-      <div><span>Prepared models</span><strong>{model_count}</strong></div>
-    </div>
-
-    <table>
-      <thead><tr><th>Endpoint</th><th>Purpose</th></tr></thead>
-      <tbody>{rows}</tbody>
-    </table>
-
-    <footer>EPANET / EPyT-Flow simulation service · API requests require the X-API-Key header.</footer>
+    <a class="app-link" href="/app">Open Hydraulic Model</a>
   </main>
 </body>
 </html>"""
@@ -184,6 +146,7 @@ def create_app() -> FastAPI:
     # ── routers ───────────────────────────────────────────────────────────────
     app.include_router(files.router)
     app.include_router(upload.router)
+    app.include_router(inp.router)
     app.include_router(dma.router)
     app.include_router(simulation.router)
     app.include_router(majiscope.router)

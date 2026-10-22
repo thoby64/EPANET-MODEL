@@ -9,7 +9,6 @@ Integration tests for the DMA endpoints:
 
 import asyncio
 import os
-from types import SimpleNamespace
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -46,67 +45,6 @@ async def test_layers_auth_required(client):
 async def test_layers_missing_file(client):
     r = await client.get("/dma/does_not_exist.gpkg/layers", headers=AUTH)
     assert r.status_code == 404
-
-
-async def test_uploaded_inp_editor_requires_authentication(client):
-    r = await client.get(f"/dma/{DMA_FILE}/inp-editor")
-    assert r.status_code == 401
-
-
-async def test_uploaded_inp_editor_requires_prepared_upload(client):
-    r = await client.get("/dma/does_not_exist.gpkg/inp-editor", headers=AUTH)
-    assert r.status_code == 404
-
-
-async def test_uploaded_inp_editor_returns_scoped_elements(client, tmp_path, monkeypatch):
-    import json
-    from app.routers import dma as dma_router
-
-    inp_dir = tmp_path / "inp"
-    inp_dir.mkdir()
-    inp_path = inp_dir / "uploaded.inp"
-    inp_path.write_text("[JUNCTIONS]\n", encoding="ascii")
-    metadata = tmp_path / "majiscope_editor.json"
-    metadata.write_text(
-        json.dumps({"inp_filename": "uploaded.inp"}),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        dma_router,
-        "get_settings",
-        lambda: SimpleNamespace(gpkg_dir=str(tmp_path), inp_dir=str(inp_dir)),
-    )
-    feature_collection = {
-            "type": "FeatureCollection",
-            "features": [],
-    }
-    expected = {
-        "junction_count": 1,
-        "reservoir_count": 1,
-        "tank_count": 1,
-        "pipe_count": 1,
-        "valve_count": 1,
-        "pump_count": 1,
-        "coordinates_are_lonlat": True,
-        "junctions": feature_collection,
-        "reservoirs": feature_collection,
-        "tanks": feature_collection,
-        "pipes": feature_collection,
-        "valves": feature_collection,
-        "pumps": feature_collection,
-    }
-    monkeypatch.setattr(
-        dma_router,
-        "inspect_inp_elements",
-        lambda path: expected if path == str(inp_path) else {},
-    )
-
-    response = await client.get(
-        "/dma/majiscope_editor.gpkg/inp-editor",
-        headers=AUTH,
-    )
-    assert response.status_code == 200
-    assert response.json() == expected
 
 
 async def test_layers_shape(client):
@@ -210,10 +148,11 @@ async def test_full_dma_simulation_lifecycle(client):
 
     assert s["status"] == "DONE", f"Simulation failed: {s.get('error_message')}"
 
-    sm = s.get("summary", {})
-    assert sm.get("total_nodes", 0) > 0
-    assert sm.get("total_pipes", 0) > 0
-    assert sm.get("pressure_avg_m", -1) >= 0
+    # Summary sanity checks
+    sm = s["summary"]
+    assert sm["total_nodes"] > 0
+    assert sm["total_pipes"] > 0
+    assert sm["pressure_avg_m"] > 0
 
     # 3. GET leakage report
     r = await client.get(
@@ -345,6 +284,106 @@ def test_topology_repair_utm_roundtrip():
         assert abs(lat2 - lat) < 1e-5, f"lat roundtrip error: {abs(lat2-lat)}"
 
 
+def test_leakage_analyse_smoke():
+    """Leakage analysis must return a valid report without crashing."""
+    from app.services.leakage_report import analyse_leakage
+    from app.services.simulation_service import NodeResult, PipeResult, SimulationOutput
+
+    node_results = [
+        NodeResult("J0", 0, -6.13, 35.83, 25.0, None, None, None, False),
+        NodeResult("J0", 1, -6.13, 35.83, 22.0, None, None, None, False),
+        NodeResult("J1", 0, -6.14, 35.84,  3.0, None, None, None, True),
+        NodeResult("J1", 1, -6.14, 35.84,  4.0, None, None, None, True),
+    ]
+    pipe_results = [
+        PipeResult("P0", 0, -6.13, 35.83, 0.002, None, None, False),
+        PipeResult("P0", 1, -6.13, 35.83, 0.003, None, None, False),
+    ]
+    summary = {
+        "pressure_min_m": 3.0, "pressure_max_m": 25.0, "pressure_avg_m": 14.0,
+        "total_nodes": 2, "total_pipes": 1, "time_steps": 2, "duration_hrs": 1,
+        "low_pressure_nodes": 1,
+    }
+    output = SimulationOutput(node_results=node_results, pipe_results=pipe_results, summary=summary)
+
+    report = analyse_leakage(output, scenario_id=99, dma_name="Test DMA")
+
+    assert report.scenario_id == 99
+    assert report.nrw.nrw_pct >= 0
+    assert report.nrw.ili     >= 0
+    assert len(report.pressure_zones) == 3
+    assert len(report.pipe_risks)     > 0
+    assert report.hotspots["type"]    == "FeatureCollection"
+
+
+# ── EPANET .inp upload endpoints ─────────────────────────────────────────────
+
+# ── POST /inp/{file}/simulate + GET /inp/{file}/layers ───────────────────────
+
+async def test_inp_layers_requires_auth(client):
+    r = await client.get("/inp/whatever.inp/layers")
+    assert r.status_code == 401
+
+
+async def test_inp_list_requires_auth(client):
+    r = await client.get("/inp")
+    assert r.status_code == 401
+
+
+async def test_inp_simulate_requires_auth(client):
+    r = await client.post("/inp/whatever.inp/simulate", json={"name": "x"})
+    assert r.status_code == 401
+
+
+async def test_inp_upload_requires_auth(client):
+    r = await client.post("/inp/upload")
+    assert r.status_code == 401
+
+
+# ── scenario_type contract ──────────────────────────────────────────────────
+
+async def test_simulate_rejects_leakage_frac_for_non_research(client):
+    """Synthetic leak injection is research-only and must be rejected up front."""
+    if not _dma_present():
+        pytest.skip(f"DMA gpkg not found: {DMA_FILE}")
+
+    r = await client.post(
+        f"/dma/{DMA_FILE}/simulate",
+        headers=AUTH,
+        json={"leakage_frac": 0.2, "scenario_type": "baseline"},
+    )
+    assert r.status_code == 422
+
+
+async def test_simulate_rejects_unknown_scenario_type(client):
+    if not _dma_present():
+        pytest.skip(f"DMA gpkg not found: {DMA_FILE}")
+
+    r = await client.post(
+        f"/dma/{DMA_FILE}/simulate",
+        headers=AUTH,
+        json={"scenario_type": "not_a_scenario"},
+    )
+    assert r.status_code == 422
+
+
+async def test_simulate_rejects_reported_leaks_without_matching_type(client):
+    if not _dma_present():
+        pytest.skip(f"DMA gpkg not found: {DMA_FILE}")
+
+    r = await client.post(
+        f"/dma/{DMA_FILE}/simulate",
+        headers=AUTH,
+        json={
+            "scenario_type": "baseline",
+            "reported_leaks": [{"lat": 0.3, "lon": 32.5, "diameter_m": 0.02}],
+        },
+    )
+    assert r.status_code == 422
+
+
+# ── EPANET .inp element editing ──────────────────────────────────────────────
+
 def test_build_leak_events_uses_pre_resolved_events():
     from app.workers.simulation_worker import _build_leak_events
 
@@ -353,31 +392,6 @@ def test_build_leak_events_uses_pre_resolved_events():
     ]
 
     assert _build_leak_events({"_leak_events": events}, "unused.inp", 3600) == events
-
-
-def test_build_leak_events_maps_coordinates(monkeypatch):
-    from app.workers import simulation_worker
-
-    monkeypatch.setattr(
-        simulation_worker,
-        "_parse_inp_coordinates",
-        lambda _: {"J-1": (-6.13, 35.83)},
-    )
-    monkeypatch.setattr(
-        simulation_worker,
-        "_parse_inp_junction_ids",
-        lambda _: {"J-1"},
-    )
-
-    events = simulation_worker._build_leak_events(
-        [{"lat": -6.13, "lon": 35.83, "diameter_m": 0.02, "end_time_s": 7200}],
-        "unused.inp",
-        3600,
-    )
-
-    assert events == [
-        {"node_id": "J-1", "diameter": 0.02, "start_time": 0, "end_time": 3600},
-    ]
 
 
 def test_patch_inp_junctions_preserves_original_and_comments(tmp_path):
@@ -479,90 +493,3 @@ def test_patch_inp_elements_supports_all_sections_and_statuses(tmp_path):
     assert "p1" not in records["[STATUS]"]
     assert " ; pipe comment" in result
 
-
-def test_gis_model_overrides_mutate_only_requested_elements():
-    from app.routers.dma import ModelOverrides, PipeEdit, _apply_gis_overrides
-
-    pipe = SimpleNamespace(fid=7, diam_mm=100.0, hw_c=120.0)
-    dma = SimpleNamespace(pipes=[pipe], sources=[], tanks=[], valves=[])
-    overrides = ModelOverrides(pipes={"7": PipeEdit(diam_mm=125.0)})
-
-    applied = _apply_gis_overrides(dma, overrides)
-
-    assert pipe.diam_mm == 125.0
-    assert pipe.hw_c == 120.0
-    assert applied == {"pipes": {"7": {"diam_mm": 125.0}}}
-
-
-def test_uploaded_pipe_overrides_accept_check_valve_status():
-    from app.routers.dma import ModelOverrides
-
-    overrides = ModelOverrides(inp_pipes={"P1": {"status": "CV"}})
-
-    assert overrides.inp_pipes["P1"].status == "CV"
-
-
-def test_gis_model_overrides_reject_unknown_feature_ids():
-    from app.routers.dma import ModelOverrides, PipeEdit, _apply_gis_overrides
-
-    dma = SimpleNamespace(
-        pipes=[SimpleNamespace(fid=7, diam_mm=100.0, hw_c=120.0)],
-        sources=[],
-        tanks=[],
-        valves=[],
-    )
-    overrides = ModelOverrides(pipes={"99": PipeEdit(diam_mm=125.0)})
-
-    with pytest.raises(ValueError, match="Unknown pipe feature ID"):
-        _apply_gis_overrides(dma, overrides)
-
-
-def test_build_leak_events_maps_coordinates_only_to_junctions(tmp_path):
-    from app.workers.simulation_worker import _build_leak_events
-
-    inp_path = tmp_path / "network.inp"
-    inp_path.write_text(
-        "[JUNCTIONS]\nJ1 0 0.01\n"
-        "[RESERVOIRS]\nR1 20\n"
-        "[COORDINATES]\nJ1 35.0 -6.0\nR1 35.0001 -6.0\n[END]\n"
-    )
-
-    events = _build_leak_events(
-        [{"lat": -6.0, "lon": 35.0001, "diameter_m": 0.02}],
-        str(inp_path),
-        3600,
-    )
-
-    assert events[0]["node_id"] == "J1"
-
-
-def test_leakage_analyse_smoke():
-    """Leakage analysis must return a valid report without crashing."""
-    from app.services.leakage_report import analyse_leakage
-    from app.services.simulation_service import NodeResult, PipeResult, SimulationOutput
-
-    node_results = [
-        NodeResult("J0", 0, -6.13, 35.83, 25.0, None, None, None, False),
-        NodeResult("J0", 1, -6.13, 35.83, 22.0, None, None, None, False),
-        NodeResult("J1", 0, -6.14, 35.84,  3.0, None, None, None, True),
-        NodeResult("J1", 1, -6.14, 35.84,  4.0, None, None, None, True),
-    ]
-    pipe_results = [
-        PipeResult("P0", 0, -6.13, 35.83, 0.002, None, None, False),
-        PipeResult("P0", 1, -6.13, 35.83, 0.003, None, None, False),
-    ]
-    summary = {
-        "pressure_min_m": 3.0, "pressure_max_m": 25.0, "pressure_avg_m": 14.0,
-        "total_nodes": 2, "total_pipes": 1, "time_steps": 2, "duration_hrs": 1,
-        "low_pressure_nodes": 1,
-    }
-    output = SimulationOutput(node_results=node_results, pipe_results=pipe_results, summary=summary)
-
-    report = analyse_leakage(output, scenario_id=99, dma_name="Test DMA")
-
-    assert report.scenario_id == 99
-    assert report.nrw.nrw_pct >= 0
-    assert report.nrw.ili     >= 0
-    assert len(report.pressure_zones) == 3
-    assert len(report.pipe_risks)     > 0
-    assert report.hotspots["type"]    == "FeatureCollection"

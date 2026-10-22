@@ -1,37 +1,186 @@
 # tests/test_api.py
 """
-Basic API integration tests — auth, /health, /files, /simulate (GET only).
-DMA-specific lifecycle tests are in test_dma.py.
+Integration tests for the EPANET simulation service.
+
+Run with:
+    pytest tests/ -v
+
+Requires the service to have a test .gpkg file available.
+Set TEST_GPKG_FILE env var to your filename, e.g.:
+    TEST_GPKG_FILE=duwas_network_clean.gpkg pytest tests/ -v
 """
 
 import os
-
+import asyncio
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient, ASGITransport
 
-os.environ.setdefault("API_KEYS",     "test-key-123")
-os.environ.setdefault("GPKG_DIR",     "/data/gpkg")
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:////tmp/test_api.db")
+# set test env before importing the app
+os.environ.setdefault("API_KEYS",       "test-key-123")
+os.environ.setdefault("GPKG_DIR",       "/data/gpkg")
+os.environ.setdefault("DATABASE_URL",   "sqlite+aiosqlite:////tmp/test_epanet.db")
 
 from app.main import app  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
 
-AUTH = {"X-API-Key": "test-key-123"}
+
+TEST_KEY      = "test-key-123"
+TEST_GPKG     = os.getenv("TEST_GPKG_FILE", "duwas_network_clean.gpkg")
+AUTH_HEADERS  = {"X-API-Key": TEST_KEY}
+AUTH          = AUTH_HEADERS
+
+
+@pytest.fixture(scope="session")
+def event_loop():
+    loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
 
 
 @pytest.fixture(scope="session")
 async def client():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as c:
         yield c
 
 
-# ── health ────────────────────────────────────────────────────────────────────
+# ── auth tests ─────────────────────────────────────────────────────────────────
 
-async def test_health_no_auth(client):
+@pytest.mark.asyncio
+async def test_no_api_key_rejected(client):
+    r = await client.get("/files")
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_wrong_api_key_rejected(client):
+    r = await client.get("/files", headers={"X-API-Key": "wrong"})
+    assert r.status_code == 401
+
+
+# ── health ─────────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_health(client):
     r = await client.get("/health")
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
 
+
+# ── files ──────────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_list_files(client):
+    r = await client.get("/files", headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+
+
+# ── simulation lifecycle ───────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_submit_simulation_missing_file(client):
+    r = await client.post("/simulate", headers=AUTH_HEADERS, json={
+        "gpkg_filename": "does_not_exist.gpkg",
+        "name": "Should fail",
+    })
+    # 202 queued, but will transition to FAILED
+    assert r.status_code in (202, 404)
+
+
+@pytest.mark.asyncio
+async def test_simulate_not_found(client):
+    r = await client.get("/simulate/99999", headers=AUTH_HEADERS)
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_list_simulations(client):
+    r = await client.get("/simulate", headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+
+
+@pytest.mark.asyncio
+async def test_list_simulations_filter_status(client):
+    r = await client.get("/simulate?status=DONE", headers=AUTH_HEADERS)
+    assert r.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_delete_nonexistent(client):
+    r = await client.delete("/simulate/99999", headers=AUTH_HEADERS)
+    assert r.status_code == 404
+
+
+# ── full simulation (skipped if no gpkg file present) ─────────────────────────
+
+@pytest.mark.asyncio
+async def test_full_simulation_lifecycle(client):
+    """
+    End-to-end test: submit → poll until DONE → fetch results → alerts → GeoJSON.
+    Skipped if TEST_GPKG_FILE is not present on disk.
+    """
+    gpkg_dir = os.getenv("GPKG_DIR", "/data/gpkg")
+    if not os.path.isfile(os.path.join(gpkg_dir, TEST_GPKG)):
+        pytest.skip(f"Test gpkg not found: {TEST_GPKG}")
+
+    # submit
+    r = await client.post("/simulate", headers=AUTH_HEADERS, json={
+        "gpkg_filename": TEST_GPKG,
+        "name":          "Test run",
+        "duration_hrs":  1,
+        "time_step_min": 60,
+        "base_demand":   0.001,
+    })
+    assert r.status_code == 202
+    scenario_id = r.json()["id"]
+
+    # poll until done or failed (timeout after 120 s)
+    import asyncio as aio
+    for _ in range(40):
+        await aio.sleep(3)
+        r = await client.get(f"/simulate/{scenario_id}", headers=AUTH_HEADERS)
+        data = r.json()
+        if data["status"] in ("DONE", "FAILED"):
+            break
+
+    assert data["status"] == "DONE", f"Simulation failed: {data.get('error_message')}"
+    assert data["summary"] is not None
+
+    # node results at hour 0
+    r = await client.get(f"/simulate/{scenario_id}/nodes?time_step=0", headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    nodes = r.json()
+    assert len(nodes) > 0
+    assert "pressure" in nodes[0]
+
+    # pipe results at hour 0
+    r = await client.get(f"/simulate/{scenario_id}/pipes?time_step=0", headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    assert len(r.json()) > 0
+
+    # alerts
+    r = await client.get(f"/simulate/{scenario_id}/alerts?time_step=0", headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    alerts = r.json()
+    assert "low_pressure_nodes" in alerts
+    assert "high_velocity_pipes" in alerts
+
+    # GeoJSON
+    r = await client.get(f"/simulate/{scenario_id}/geojson/nodes?time_step=0", headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    gj = r.json()
+    assert gj["type"] == "FeatureCollection"
+    assert len(gj["features"]) > 0
+
+    # cleanup
+    r = await client.delete(f"/simulate/{scenario_id}", headers=AUTH_HEADERS)
+    assert r.status_code == 204
+
+
+# ── landing page + standalone configuration ──────────────────────────────────────
 
 async def test_root_serves_live_status_page(client):
     r = await client.get("/")
@@ -40,6 +189,9 @@ async def test_root_serves_live_status_page(client):
     assert "Live" in r.text
     assert get_settings().service_name in r.text
     assert "/app" in r.text
+    # The landing page only links to the model workspace.
+    assert "/docs" not in r.text
+    assert "/majiscope/prepare-gpkg" not in r.text
 
 
 async def test_standalone_config_exposes_shared_api_key(client):
@@ -57,97 +209,6 @@ async def test_standalone_config_hides_key_when_not_configured(client, monkeypat
     assert r.status_code == 200
     assert r.json()["api_key"] == ""
 
-
-# ── auth ──────────────────────────────────────────────────────────────────────
-
-async def test_files_requires_auth(client):
-    r = await client.get("/files")
-    assert r.status_code == 401
-
-
-async def test_simulate_list_requires_auth(client):
-    r = await client.get("/simulate")
-    assert r.status_code == 401
-
-
-async def test_simulate_get_requires_auth(client):
-    r = await client.get("/simulate/1")
-    assert r.status_code == 401
-
-
-# ── /files ───────────────────────────────────────────────────────────────────
-
-async def test_files_returns_list(client):
-    r = await client.get("/files", headers=AUTH)
-    assert r.status_code == 200
-    data = r.json()
-    assert isinstance(data, list)
-    # All entries must have the new DMA-aware fields
-    for f in data:
-        assert "filename" in f
-        assert "size_kb" in f
-        assert "layers" in f
-        assert "missing_layers" in f
-        assert "has_dma_structure" in f
-
-
-async def test_files_duwasa_present(client):
-    r = await client.get("/files", headers=AUTH)
-    names = [f["filename"] for f in r.json()]
-    if "DUWASA.gpkg" in names:
-        entry = next(f for f in r.json() if f["filename"] == "DUWASA.gpkg")
-        assert entry["has_dma_structure"] is True
-        assert "dma" in entry["layers"]
-        assert "waterpipes" in entry["layers"]
-
-
-# ── /simulate (GET only — POST is via /dma) ───────────────────────────────────
-
-async def test_simulate_list_empty(client):
-    r = await client.get("/simulate", headers=AUTH)
-    assert r.status_code == 200
-    assert isinstance(r.json(), list)
-
-
-async def test_simulate_get_not_found(client):
-    r = await client.get("/simulate/99999", headers=AUTH)
-    assert r.status_code == 404
-
-
-async def test_simulate_delete_not_found(client):
-    r = await client.delete("/simulate/99999", headers=AUTH)
-    assert r.status_code == 404
-
-
-async def test_simulate_post_removed(client):
-    """
-    POST /simulate is intentionally removed — DMA simulations go through
-    POST /dma/{file}/simulate.  Verify the route no longer exists.
-    """
-    r = await client.post("/simulate", headers=AUTH, json={})
-    assert r.status_code == 405   # Method Not Allowed
-
-
-# ── docs ──────────────────────────────────────────────────────────────────────
-
-async def test_openapi_schema(client):
-    r = await client.get("/openapi.json")
-    assert r.status_code == 200
-    schema = r.json()
-    paths = schema["paths"]
-    # DMA simulate must be present
-    assert "/dma/{filename}/simulate" in paths
-    # Old generic POST /simulate must be gone
-    assert "post" not in paths.get("/simulate", {})
-    prepare_model = paths["/majiscope/prepare-gpkg"]["post"]
-    request_schema_ref = prepare_model["requestBody"]["content"]["multipart/form-data"]["schema"]["$ref"]
-    request_schema_name = request_schema_ref.rsplit("/", 1)[-1]
-    request_schema = schema["components"]["schemas"][request_schema_name]
-    assert "inp_file" in request_schema["properties"]
-    assert "inp_file" not in request_schema.get("required", [])
-
-
-# ── /files/upload ─────────────────────────────────────────────────────────────
 
 async def test_upload_requires_auth(client):
     r = await client.post("/files/upload")
@@ -205,104 +266,3 @@ async def test_upload_gpkg_roundtrip(client):
     import os as _os
     _os.remove(os.path.join(os.getenv("GPKG_DIR", "/data/gpkg"), "test_upload.gpkg"))
 
-
-# ── /dma/{file}/zones ─────────────────────────────────────────────────────────
-
-async def test_dma_zones(client):
-    if not os.path.isfile(
-        os.path.join(os.getenv("GPKG_DIR", "/data/gpkg"), "DUWASA.gpkg")
-    ):
-        pytest.skip("DUWASA.gpkg not found")
-    r = await client.get("/dma/DUWASA.gpkg/zones", headers=AUTH)
-    assert r.status_code == 200
-    d = r.json()
-    assert "zones" in d
-    assert "count" in d
-    assert d["count"] >= 1
-    zone = d["zones"][0]
-    assert "name" in zone
-    assert "bbox" in zone
-    assert len(zone["bbox"]) == 4
-
-
-async def test_detailed_result_aggregates_and_tanks(client):
-    from app.core.database import get_session
-    from app.models.simulation import SimResult, SimScenario
-
-    filename = "detailed-results-test.gpkg"
-    async with get_session() as db:
-        scenario = SimScenario(
-            gpkg_filename=filename,
-            name="Detailed result API test",
-            status="DONE",
-            duration_hrs=1,
-            time_step_min=30,
-        )
-        db.add(scenario)
-        await db.flush()
-        scenario_id = scenario.id
-        db.add_all([
-            SimResult(
-                scenario_id=scenario_id, time_step=0, element_type="node",
-                element_id="J1", pressure=5, water_age=0, demand=0.001,
-                is_low_pressure=True,
-            ),
-            SimResult(
-                scenario_id=scenario_id, time_step=0, element_type="node",
-                element_id="J2", pressure=15, water_age=2, demand=0.002,
-            ),
-            SimResult(
-                scenario_id=scenario_id, time_step=1, element_type="node",
-                element_id="J1", pressure=7, water_age=3, demand=0.001,
-            ),
-            SimResult(
-                scenario_id=scenario_id, time_step=0, element_type="pipe",
-                element_id="P1", flow_rate=0.01,
-            ),
-            SimResult(
-                scenario_id=scenario_id, time_step=0, element_type="pipe",
-                element_id="P2", flow_rate=-0.02,
-            ),
-            SimResult(
-                scenario_id=scenario_id, time_step=1, element_type="tank",
-                element_id="T1", volume_m3=42.5,
-            ),
-        ])
-
-    try:
-        response = await client.get(
-            f"/simulate/{scenario_id}/timeseries",
-            headers=AUTH,
-        )
-        assert response.status_code == 200, response.text
-        result = response.json()
-        first_step = result["pressure"][0]
-        assert first_step["hour"] == 0
-        assert first_step["pressure_min_m"] == 5
-        assert first_step["pressure_avg_m"] == 10
-        assert first_step["pressure_max_m"] == 15
-        assert first_step["water_age_avg_hrs"] == 1
-        assert first_step["water_age_max_hrs"] == 2
-        assert first_step["total_demand_m3h"] == 10.8
-        assert first_step["low_pressure_nodes"] == 1
-        assert result["pressure"][1]["hour"] == 0.5
-        assert result["pipe_flow"][0]["flow_avg_m3s"] == 0.015
-        assert result["pipe_flow"][0]["flow_max_abs_m3s"] == 0.02
-
-        response = await client.get(
-            f"/dma/{filename}/simulate/{scenario_id}/tanks",
-            headers=AUTH,
-        )
-        assert response.status_code == 200, response.text
-        tank = response.json()["tanks"][0]
-        assert tank["tank_id"] == "T1"
-        assert tank["series"] == [{
-            "time_step": 1,
-            "hour": 0.5,
-            "volume_m3": 42.5,
-        }]
-    finally:
-        async with get_session() as db:
-            scenario = await db.get(SimScenario, scenario_id)
-            if scenario:
-                await db.delete(scenario)

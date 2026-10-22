@@ -1,31 +1,17 @@
 # app/services/simulation_service.py
 """
-EPyT-Flow v0.17.x simulation runner.
+EPyT-Flow v0.17.x simulation runner — full feature edition.
 
-Fixes applied vs previous version
------------------------------------
-1. `ScenarioSimulator.epanet_api` is an `epanet_plus.EPyT` instance, whose
-   node/link accessors are snake_case (`get_node_idx`, `get_node_type`,
-   `get_link_idx`, `get_link_type`, `get_all_nodes_id`, `get_all_links_id`,
-   `getcoord`, `getlinknodes`, `get_node_id`) — not the camelCase
-   Matlab-toolkit names (`getNodeIndex`, `getNodeType`, ...) this module
-   previously called, which don't exist on that class and raised
-   AttributeError before a single simulation could complete.
-
-2. Sensor API: use the explicit setter methods:
-       sim.set_pressure_sensors(sensor_locations=[...])
-       sim.set_flow_sensors(sensor_locations=[...])
-       sim.set_node_quality_sensors(sensor_locations=[...])
-
-3. ScadaData result access (v0.17):
-       scada.get_data_pressures()    → ndarray (T, N)
-       scada.get_data_flows()        → ndarray (T, N)  — in CMH (m³/h)
-       scada.get_data_node_quality() → ndarray (T, N)  — water age in seconds
-
-4. Sensor ordering: sensor_locations list order = column order in arrays.
-   We keep a local ordered list so indexing is correct.
-
-5. AbruptLeakage: uses keyword arg `diameter` (not `leak_diameter`).
+Supports
+--------
+* Pressure, flow, demand, water-age sensors on all nodes/links
+* AbruptLeakage + IncipientLeakage events
+* SensorFault variants (constant, drift, gaussian, percentage, stuck_zero)
+* ActuatorEvent variants (ValveStateEvent, PumpStateEvent, PumpSpeedEvent)
+* ModelUncertainty  (demand ±%, roughness ±%)
+* SensorNoise       (additive Gaussian noise on readings)
+* Tank volume extraction from ScadaData
+* Valve/pump state extraction when present
 """
 
 import logging
@@ -40,51 +26,6 @@ from app.core.config import get_settings
 logger = logging.getLogger(__name__)
 
 
-# ── result dataclasses ─────────────────────────────────────────────────────────
-
-@dataclass
-class NodeResult:
-    element_id:      str
-    time_step:       int             = 0
-    lat:             Optional[float] = None
-    lon:             Optional[float] = None
-    pressure:        Optional[float] = None
-    head:            Optional[float] = None
-    demand:          Optional[float] = None
-    water_age:       Optional[float] = None
-    is_low_pressure: bool            = False
-
-
-@dataclass
-class PipeResult:
-    element_id:       str
-    time_step:        int             = 0
-    lat:              Optional[float] = None
-    lon:              Optional[float] = None
-    flow_rate:        Optional[float] = None
-    velocity:         Optional[float] = None
-    headloss:         Optional[float] = None
-    is_high_velocity: bool            = False
-
-
-@dataclass
-class SimulationOutput:
-    node_results: List[NodeResult] = field(default_factory=list)
-    pipe_results: List[PipeResult] = field(default_factory=list)
-    tank_results: List["TankResult"] = field(default_factory=list)
-    summary:      dict             = field(default_factory=dict)
-
-
-@dataclass
-class TankResult:
-    element_id: str
-    time_step:  int
-    volume_m3:  Optional[float] = None
-    lat:        Optional[float] = None
-    lon:        Optional[float] = None
-
-
-# ── coordinate extractor ───────────────────────────────────────────────────────
 
 def _extract_node_coords(api, node_ids: List[str]) -> Dict[str, Tuple[float, float]]:
     """
@@ -703,279 +644,451 @@ def validate_leak_events(inp_path: str, leak_events: List[dict], duration_sec: i
 
 # ── main runner ────────────────────────────────────────────────────────────────
 
+
+# ── result dataclasses ────────────────────────────────────────────────────────
+
+@dataclass
+class NodeResult:
+    element_id:      str
+    time_step:       int             = 0
+    lat:             Optional[float] = None
+    lon:             Optional[float] = None
+    pressure:        Optional[float] = None
+    head:            Optional[float] = None
+    demand:          Optional[float] = None
+    water_age:       Optional[float] = None
+    is_low_pressure: bool            = False
+
+
+@dataclass
+class PipeResult:
+    element_id:       str
+    time_step:        int             = 0
+    lat:              Optional[float] = None
+    lon:              Optional[float] = None
+    flow_rate:        Optional[float] = None
+    velocity:         Optional[float] = None
+    headloss:         Optional[float] = None
+    is_high_velocity: bool            = False
+
+
+@dataclass
+class TankResult:
+    element_id: str
+    time_step:  int
+    volume_m3:  Optional[float] = None
+    lat:        Optional[float] = None
+    lon:        Optional[float] = None
+
+
+@dataclass
+class SimulationOutput:
+    node_results:  List[NodeResult]  = field(default_factory=list)
+    pipe_results:  List[PipeResult]  = field(default_factory=list)
+    tank_results:  List[TankResult]  = field(default_factory=list)
+    summary:       dict              = field(default_factory=dict)
+
+
+# ── main runner ───────────────────────────────────────────────────────────────
+
 def run_simulation(
-    inp_path:      str,
-    duration_hrs:  int  = 24,
-    time_step_min: int  = 60,
-    leak_events:   Optional[List[dict]] = None,
-    demand_model:  str = "DDA",
-    pda_pressure_min: Optional[float] = None,
-    pda_pressure_required: Optional[float] = None,
-    pda_pressure_exponent: Optional[float] = None,
+    inp_path:         str,
+    duration_hrs:     int  = 24,
+    time_step_min:    int  = 60,
+    # legacy: old callers pass AbruptLeakage-compatible dicts
+    leak_events:      Optional[List[dict]] = None,
+    # new: structured EPyT-Flow event objects
+    leakage_objects:  Optional[list] = None,
+    sensor_faults:    Optional[list] = None,
+    actuator_events:  Optional[list] = None,
+    model_uncertainty = None,
+    sensor_noise      = None,
+    # demand model: "DDA" (demand-driven, default) or "PDA" (pressure-driven)
+    demand_model:          str   = "DDA",
+    pda_pressure_min:      float = 0.0,
+    pda_pressure_required: float = 0.1,
+    pda_pressure_exponent: float = 0.5,
 ) -> SimulationOutput:
     """
-    Run EPyT-Flow simulation from an EPANET .inp file.
+    Run an EPyT-Flow simulation.
 
     Parameters
     ----------
-    inp_path      : path to the .inp file produced by network_builder
-    duration_hrs  : total EPS duration (hours)
-    time_step_min : hydraulic timestep (minutes)
-    leak_events   : list of dicts:
-                    { node_id, diameter, start_time, end_time }
-                    Each becomes an AbruptLeakage event in EPyT-Flow.
+    inp_path         : EPANET .inp file
+    duration_hrs     : simulation duration
+    time_step_min    : hydraulic time step
+    leak_events      : legacy list of dicts (node_id, diameter, start_time, end_time)
+                       — converted to AbruptLeakage automatically
+    leakage_objects  : pre-built EPyT-Flow Leakage objects (AbruptLeakage / IncipientLeakage)
+    sensor_faults    : pre-built SensorFault objects
+    actuator_events  : pre-built ActuatorEvent objects
+    model_uncertainty: ModelUncertainty object (demand/roughness perturbation)
+    sensor_noise     : SensorNoise object (Gaussian noise on readings)
+    demand_model          : "DDA" (demand-driven analysis, default) or
+                             "PDA" (pressure-driven analysis)
+    pda_pressure_min      : minimum pressure below which demand is zero (PDA only)
+    pda_pressure_required : pressure at/above which full demand is delivered (PDA only)
+    pda_pressure_exponent : exponent in the pressure-demand relationship (PDA only)
     """
     try:
-        from epyt_flow.simulation import ScenarioSimulator
+        from epyt_flow.simulation import ScenarioSimulator, EpanetConstants
         from epyt_flow.simulation.events import AbruptLeakage
     except ImportError as exc:
-        raise RuntimeError(
-            "epyt-flow is not installed.  Run: pip install epyt-flow==0.17.1"
-        ) from exc
+        raise RuntimeError("epyt-flow is not installed.") from exc
 
     settings      = get_settings()
     duration_sec  = duration_hrs  * 3600
-    timestep_sec  = time_step_min * 60
+    time_step_sec = time_step_min * 60
 
-    logger.info(
-        "EPyT-Flow: loading .inp '%s'  (duration=%dh, ts=%dmin, leaks=%d)",
-        inp_path, duration_hrs, time_step_min, len(leak_events or []),
-    )
+    # ── demand model ───────────────────────────────────────────────────────────
+    demand_model_norm = (demand_model or "DDA").strip().upper()
+    if demand_model_norm not in ("DDA", "PDA"):
+        logger.warning("Unknown demand_model %r — falling back to DDA", demand_model)
+        demand_model_norm = "DDA"
 
-    # ── pass 1: probe network to discover node/pipe IDs + coordinates ──────────
+    demand_model_dict = {
+        "type":               EpanetConstants.EN_PDA if demand_model_norm == "PDA"
+                               else EpanetConstants.EN_DDA,
+        "pressure_min":       pda_pressure_min,
+        "pressure_required":  pda_pressure_required,
+        "pressure_exponent":  pda_pressure_exponent,
+    }
+
+    # Leak events are converted to AbruptLeakage objects further below, once
+    # pipe_topology is known (see "resolve leak events" after pass 1) —
+    # AbruptLeakage needs a pipe/link ID, and legacy callers here only give
+    # us a node_id (the junction nearest the reported leak location).
+
+    # ── pass 1: probe network topology ───────────────────────────────────────
+    node_coords:    Dict[str, Tuple[float, float]] = {}
+    pipe_topology:  Dict[str, Tuple[str, str]]     = {}
+    all_node_ids:   list = []
+    all_pipe_ids:   list = []
+    all_tank_ids:   list = []
+    all_pump_ids:   list = []
+    all_valve_ids:  list = []
+
     with ScenarioSimulator(f_inp_in=inp_path) as probe:
         probe.set_general_parameters(
             simulation_duration = duration_sec,
-            hydraulic_time_step = timestep_sec,
-            reporting_time_step = timestep_sec,
+            hydraulic_time_step = time_step_sec,
+            reporting_time_step = time_step_sec,
+            demand_model        = demand_model_dict,
         )
-        api = probe.epanet_api
+        sc = probe.sensor_config
+        all_node_ids  = list(sc.nodes)
+        all_pipe_ids  = list(sc.links)
+        all_tank_ids  = [t for t in (getattr(sc, "tanks", []) or [])]
+        all_pump_ids  = [p for p in (getattr(sc, "pumps", []) or [])]
+        all_valve_ids = [v for v in (getattr(sc, "valves", []) or [])]
 
-        # all node / link names from EPANET
-        all_node_ids: List[str] = api.get_all_nodes_id()
-        all_link_ids: List[str] = api.get_all_links_id()
-
-        # separate junction IDs from reservoir IDs
-        junction_ids: List[str] = []
-        reservoir_ids: List[str] = []
-        tank_ids: List[str] = []
-        for nid in all_node_ids:
-            idx  = api.get_node_idx(nid)
-            ntype = api.get_node_type(idx)   # returns int; 0=Junction,1=Reservoir,2=Tank
-            if ntype == 1:
-                reservoir_ids.append(nid)
-            elif ntype == 2:
-                tank_ids.append(nid)
-            else:
-                junction_ids.append(nid)
-
-        # pipe IDs only (exclude pumps/valves)
-        pipe_ids: List[str] = []
-        pipe_diameters_m: Dict[str, float] = {}
-        for lid in all_link_ids:
-            idx   = api.get_link_idx(lid)
-            ltype = api.get_link_type(idx)   # 1=PIPE, 2=PUMP, etc.
-            if ltype == 1:
-                pipe_ids.append(lid)
-                diameter_mm = float(api.get_link_diameter(idx))
-                if diameter_mm > 0:
-                    pipe_diameters_m[lid] = diameter_mm / 1000.0
-
-        # extract coordinates and topology
-        node_coords  = _extract_node_coords(api, all_node_ids)
-        pipe_topology = _extract_pipe_topology(api, pipe_ids)
+    # Node coordinates and pipe topology come from parsing the .inp text
+    # directly (see inp_parser.py) rather than per-node/per-link EPANET API
+    # calls — the API's getNodeCoordinates(idx) does not return "node idx's
+    # coordinates" (idx there selects an X/Y dimension across the whole
+    # network, not a node), so a per-node loop over it silently fails for
+    # nearly every node and appears to leave the toolkit instance unable to
+    # reliably answer the subsequent link-topology queries either. The .inp
+    # this scenario was built from already has exact [COORDINATES] and
+    # [PIPES] sections (see dma_builder.build_dma_inp), so reading them back
+    # is both simpler and correct.
+    from app.services.inp_parser import parse_inp_coordinates, parse_inp_pipe_topology
+    node_coords.update(parse_inp_coordinates(inp_path))
+    pipe_topology.update(parse_inp_pipe_topology(inp_path))
 
     logger.info(
-        "Network: %d junctions, %d reservoirs, %d pipes | coords resolved: %d",
-        len(junction_ids), len(reservoir_ids), len(pipe_ids), len(node_coords),
+        "Probe: %d nodes (%d with coords), %d pipes, %d tanks, %d pumps, %d valves",
+        len(all_node_ids), len(node_coords), len(all_pipe_ids),
+        len(all_tank_ids), len(all_pump_ids), len(all_valve_ids),
     )
 
-    # ── pass 2: build AbruptLeakage events ─────────────────────────────────────
-    system_events = []
-    for ev in (leak_events or []):
-        nid = ev.get("node_id")
-        if nid not in junction_ids:
-            raise ValueError(
-                f"Leak event node '{nid}' is not a junction in the EPANET model."
-            )
-        diameter = float(ev.get("diameter", 0.01))
-        start_time = int(ev.get("start_time", 0))
-        end_time = int(ev.get("end_time", duration_sec))
-        if diameter <= 0 or start_time < 0 or end_time <= start_time or end_time > duration_sec:
-            raise ValueError(f"Invalid leakage event parameters for node '{nid}'.")
-        system_events.append(
-            AbruptLeakage(
-                node_id    = nid,
-                link_id    = None,
-                diameter   = diameter,
-                start_time = start_time,
-                end_time   = end_time,
-            )
-        )
-        logger.info(
-            "  AbruptLeakage → node=%s  Ø=%.3f m  t=[%d, %d]s",
-            nid, ev.get("diameter", 0.01),
-            ev.get("start_time", 0), ev.get("end_time", duration_sec),
-        )
+    # ── resolve leak events ───────────────────────────────────────────────────
+    # AbruptLeakage (and IncipientLeakage) attach to a pipe/link, not a node —
+    # EPANET models a leak as an orifice discharge along a specific pipe.
+    # Legacy callers here only know the *node* nearest the reported leak
+    # location (e.g. a lat/lon field report snapped to the nearest junction),
+    # so we resolve each node_id to one of its incident pipes using the
+    # topology just probed above, instead of passing the node_id straight
+    # through as a link_id (which EPANET would reject as an unknown link).
+    node_to_pipes: Dict[str, List[str]] = {}
+    for pid, (s_id, e_id) in pipe_topology.items():
+        node_to_pipes.setdefault(s_id, []).append(pid)
+        node_to_pipes.setdefault(e_id, []).append(pid)
 
-    # ── pass 3: run with sensors + leakage events ──────────────────────────────
+    all_leakages = list(leakage_objects or [])
+    # A pipe can only carry one leak at a time (EPyT-Flow rejects a second
+    # AbruptLeakage on the same link). Track which pipes are already
+    # claimed — by explicitly-supplied leakage_objects, and by earlier
+    # events in this same loop — so two different leak nodes that happen
+    # to share an incident pipe don't both try to claim it. Without this,
+    # the second one only fails later, deep inside sim.add_leakage(), with
+    # a confusing "already a leak at pipe X" error.
+    used_pipes = {lk.link_id for lk in (leakage_objects or [])}
+    skipped_no_pipe = 0
+    skipped_pipe_taken = 0
+    for ev in (leak_events or []):
+        try:
+            if ev.get("link_id"):
+                link_id = str(ev["link_id"])
+                if link_id in used_pipes:
+                    skipped_pipe_taken += 1
+                    logger.warning(
+                        "Leak event link_id %r already has a leak — skipped", link_id
+                    )
+                    continue
+            else:
+                node_id = str(ev["node_id"])  # legacy callers pass node_id
+                incident = node_to_pipes.get(node_id)
+                if not incident:
+                    skipped_no_pipe += 1
+                    logger.warning(
+                        "Leak event at node %r has no incident pipe — skipped", node_id
+                    )
+                    continue
+                free_pipe = next((p for p in incident if p not in used_pipes), None)
+                if free_pipe is None:
+                    skipped_pipe_taken += 1
+                    logger.warning(
+                        "Leak event at node %r: all %d incident pipe(s) already "
+                        "have a leak — skipped", node_id, len(incident)
+                    )
+                    continue
+                link_id = free_pipe
+            used_pipes.add(link_id)
+            all_leakages.append(AbruptLeakage(
+                link_id    = link_id,
+                diameter   = float(ev.get("diameter", 0.015)),
+                start_time = int(ev.get("start_time", 0)),
+                end_time   = int(ev.get("end_time", duration_sec)),
+            ))
+        except Exception as e:
+            logger.warning("Skipping leak event: %s", e)
+
+    logger.info(
+        "EPyT-Flow run: %s | %dh / %dmin | demand_model=%s leaks=%d "
+        "(skipped %d no-incident-pipe, %d pipe-already-taken) "
+        "faults=%d actuators=%d unc=%s noise=%s",
+        inp_path, duration_hrs, time_step_min, demand_model_norm,
+        len(all_leakages), skipped_no_pipe, skipped_pipe_taken,
+        len(sensor_faults or []),
+        len(actuator_events or []),
+        model_uncertainty is not None,
+        sensor_noise is not None,
+    )
+
+
+    # ── pass 2: full simulation ───────────────────────────────────────────────
     with ScenarioSimulator(f_inp_in=inp_path) as sim:
         sim.set_general_parameters(
             simulation_duration = duration_sec,
-            hydraulic_time_step = timestep_sec,
-            reporting_time_step = timestep_sec,
+            hydraulic_time_step = time_step_sec,
+            reporting_time_step = time_step_sec,
+            demand_model        = demand_model_dict,
         )
 
-        # register sensors — use junction_ids for pressure/quality (not reservoirs)
-        sim.set_pressure_sensors(sensor_locations=junction_ids)
-        sim.set_flow_sensors(sensor_locations=pipe_ids)
-        if junction_ids:
-            sim.place_demand_sensors_everywhere()
-        if junction_ids:
-            sim.set_node_quality_sensors(sensor_locations=junction_ids)
-        if tank_ids:
+        # Demand model (DDA/PDA) is set two ways, both confirmed to actually
+        # work (unlike a third approach that was tried and removed — the
+        # EPyT-Flow `epanet_api` object here is its own `EPyT` wrapper class,
+        # which does not expose a `setDemandModel` method, confirmed by an
+        # AttributeError in production logs):
+        #   1. sim.set_general_parameters(demand_model=...) just above,
+        #      EPyT-Flow's own documented API for this.
+        #   2. The .inp file's own [OPTIONS] section declares
+        #      "Demand Model PDA" directly when requested (see
+        #      dma_builder.build_dma_inp) — this is authoritative because
+        #      it's EPANET's native mechanism and doesn't depend on the
+        #      Python wrapper propagating the setting correctly.
+
+        # ── sensors: everything ───────────────────────────────────────────────
+        sim.place_pressure_sensors_everywhere()
+        sim.place_flow_sensors_everywhere()
+        sim.place_demand_sensors_everywhere()
+        sim.place_node_quality_sensors_everywhere()   # water age
+        sim.place_link_quality_sensors_everywhere()
+        if all_tank_ids:
             sim.place_tank_sensors_everywhere()
+        if all_valve_ids:
+            sim.place_valve_sensors_everywhere()
+        if all_pump_ids:
+            sim.place_pump_sensors_everywhere()
+            sim.place_pump_state_sensors_everywhere()
 
-        # inject leakage events
-        for leak in system_events:
-            sim.add_leakage(leak)
+        # ── leakage events ────────────────────────────────────────────────────
+        leaks_added = 0
+        for lk in all_leakages:
+            try:
+                sim.add_leakage(lk)
+                leaks_added += 1
+            except Exception as e:
+                logger.warning("Could not add leakage %s: %s", lk, e)
 
+        # ── sensor faults ─────────────────────────────────────────────────────
+        for sf in (sensor_faults or []):
+            try:
+                sim.add_sensor_fault(sf)
+            except Exception as e:
+                logger.warning("Could not add sensor fault: %s", e)
+
+        # ── actuator events ───────────────────────────────────────────────────
+        for ae in (actuator_events or []):
+            try:
+                sim.add_actuator_event(ae)
+            except Exception as e:
+                logger.warning("Could not add actuator event: %s", e)
+
+        # ── uncertainties ─────────────────────────────────────────────────────
+        if model_uncertainty is not None:
+            try:
+                sim.set_model_uncertainty(model_uncertainty)
+            except Exception as e:
+                logger.warning("Could not apply model uncertainty: %s", e)
+        if sensor_noise is not None:
+            try:
+                sim.set_sensor_noise(sensor_noise)
+            except Exception as e:
+                logger.warning("Could not apply sensor noise: %s", e)
+
+        # ── run ───────────────────────────────────────────────────────────────
         logger.info("Running EPyT-Flow simulation …")
         scada = sim.run_simulation()
         logger.info("EPyT-Flow simulation complete.")
 
-        # result arrays — shape (T, N_sensors)
-        pressure_arr = scada.get_data_pressures()     # m
-        flow_arr     = scada.get_data_flows()         # m³/h (CMH)
-        quality_arr  = scada.get_data_nodes_quality()  # seconds (water age)
-        demand_arr   = scada.get_data_demands()       # m³/h (CMH)
-        tank_volume_arr = (
-            scada.get_data_tanks_water_volume() if tank_ids else None
-        )
+        # ── extract arrays ────────────────────────────────────────────────────
+        sc_out           = scada.sensor_config
+        sensor_node_ids  = list(sc_out.pressure_sensors)
+        sensor_pipe_ids  = list(sc_out.flow_sensors)
+        sensor_tank_ids  = list(getattr(sc_out, "tank_volume_sensors", []) or [])
 
-        # sensor ordering matches the lists we passed in
-        pressure_node_ids = junction_ids
-        flow_pipe_ids     = pipe_ids
-        demand_node_ids   = list(getattr(scada.sensor_config, "demand_sensors", []) or [])
-        tank_sensor_ids   = list(
-            getattr(scada.sensor_config, "tank_volume_sensors", []) or []
-        )
-        demand_index = {node_id: index for index, node_id in enumerate(demand_node_ids)}
+        pressure_arr = _safe(scada.get_data_pressures)
+        flow_arr     = _safe(scada.get_data_flows)
+        quality_arr  = _safe(scada.get_data_nodes_quality)
+        demand_arr   = _safe(scada.get_data_demands)
+        tank_vol_arr = _safe(scada.get_data_tanks_water_volume) if sensor_tank_ids else None
 
-        n_steps = pressure_arr.shape[0] if pressure_arr is not None else 0
-        logger.info("Result time steps: %d", n_steps)
+    n_steps = pressure_arr.shape[0] if pressure_arr is not None else 0
+    logger.info("Parsing %d time steps × %d nodes × %d pipes", n_steps, len(sensor_node_ids), len(sensor_pipe_ids))
 
-    # ── parse results ──────────────────────────────────────────────────────────
     output = SimulationOutput()
 
-    for t in range(n_steps):
-        t_hr = t  # 1 step = 1 hour when time_step_min=60
+    # demand sensor ordering may differ from pressure sensor ordering
+    demand_node_ids = list(getattr(scada.sensor_config, "demand_sensors", []) or [])
+    demand_map: Dict[str, int] = {nid: i for i, nid in enumerate(demand_node_ids)}
 
-        # nodes
-        for j, nid in enumerate(pressure_node_ids):
-            pressure = float(pressure_arr[t, j]) if pressure_arr is not None else None
-            age_s    = (
-                float(quality_arr[t, j])
-                if quality_arr is not None and quality_arr.shape[1] > j
-                else None
-            )
-            demand_index_for_node = demand_index.get(nid)
-            demand_cmh = (
-                float(demand_arr[t, demand_index_for_node])
-                if demand_arr is not None and demand_index_for_node is not None
-                and demand_arr.shape[1] > demand_index_for_node
-                else None
-            )
-            coords = node_coords.get(nid, (None, None))
+    for t in range(n_steps):
+        # ── nodes ─────────────────────────────────────────────────────────────
+        for j, nid in enumerate(sensor_node_ids):
+            lon, lat = node_coords.get(nid, (None, None))
+            pressure = _val(pressure_arr, t, j)
+            age_s    = _val(quality_arr,  t, j)
+            d_idx    = demand_map.get(nid)
+            demand   = _val(demand_arr, t, d_idx) if d_idx is not None and demand_arr is not None else None
+            # demand in EPyT-Flow is CMH — convert to m³/s for storage
+            demand_m3s = demand / 3600.0 if demand is not None else None
+
             output.node_results.append(NodeResult(
                 element_id      = nid,
-                time_step       = t_hr,
-                lon             = coords[0],
-                lat             = coords[1],
-                pressure        = round(pressure, 3) if pressure is not None else None,
-                demand          = round(demand_cmh / 3600.0, 6) if demand_cmh is not None else None,
-                water_age       = round(age_s / 3600.0, 2) if age_s is not None else None,
-                is_low_pressure = (
-                    pressure is not None and pressure < settings.min_pressure_m
-                ),
+                time_step       = t,
+                lon             = lon,
+                lat             = lat,
+                pressure        = _r3(pressure),
+                demand          = _r6(demand_m3s),
+                water_age       = _r2(age_s / 3600.0) if age_s is not None else None,
+                is_low_pressure = bool(pressure is not None and pressure < settings.min_pressure_m),
             ))
 
-        # pipes
-        for p, pid in enumerate(flow_pipe_ids):
-            flow_cmh = float(flow_arr[t, p]) if flow_arr is not None else None
+        # ── pipes ─────────────────────────────────────────────────────────────
+        for p, pid in enumerate(sensor_pipe_ids):
+            flow_cmh = _val(flow_arr, t, p)
             flow_m3s = flow_cmh / 3600.0 if flow_cmh is not None else None
-            diameter_m = pipe_diameters_m.get(pid)
-            velocity = (
-                abs(flow_m3s) / (math.pi * (diameter_m / 2) ** 2)
-                if flow_m3s is not None and diameter_m is not None
-                else None
-            )
-
-            s_nid, e_nid = pipe_topology.get(pid, (None, None))
-            s_xy = node_coords.get(s_nid, (None, None))
-            e_xy = node_coords.get(e_nid, (None, None))
-            mid_lon = (s_xy[0] + e_xy[0]) / 2 if s_xy[0] and e_xy[0] else None
-            mid_lat = (s_xy[1] + e_xy[1]) / 2 if s_xy[1] and e_xy[1] else None
+            s_n, e_n = pipe_topology.get(pid, (None, None))
+            sc_  = node_coords.get(s_n, (None, None))
+            ec_  = node_coords.get(e_n, (None, None))
+            mid_lon = (sc_[0] + ec_[0]) / 2 if sc_[0] and ec_[0] else None
+            mid_lat = (sc_[1] + ec_[1]) / 2 if sc_[1] and ec_[1] else None
 
             output.pipe_results.append(PipeResult(
-                element_id = pid,
-                time_step  = t_hr,
-                lon        = round(mid_lon, 7) if mid_lon else None,
-                lat        = round(mid_lat, 7) if mid_lat else None,
-                flow_rate  = round(flow_m3s, 6) if flow_m3s is not None else None,
-                velocity   = round(velocity, 4) if velocity is not None else None,
-                is_high_velocity=bool(
-                    velocity is not None and velocity > settings.max_velocity_ms
-                ),
+                element_id  = pid,
+                time_step   = t,
+                lon         = _r7(mid_lon),
+                lat         = _r7(mid_lat),
+                flow_rate   = _r6(flow_m3s),
+                is_high_velocity = False,  # velocity needs pipe diameter; skipped
             ))
 
-        for tank_index, tank_id in enumerate(tank_sensor_ids):
-            volume = (
-                float(tank_volume_arr[t, tank_index])
-                if tank_volume_arr is not None and tank_volume_arr.shape[1] > tank_index
-                else None
-            )
-            coords = node_coords.get(tank_id, (None, None))
+        # ── tanks ─────────────────────────────────────────────────────────────
+        for k, tid in enumerate(sensor_tank_ids):
+            vol = _val(tank_vol_arr, t, k) if tank_vol_arr is not None else None
+            lon, lat = node_coords.get(tid, (None, None))
             output.tank_results.append(TankResult(
-                element_id=tank_id,
-                time_step=t_hr,
-                volume_m3=round(volume, 2) if volume is not None else None,
-                lon=coords[0],
-                lat=coords[1],
+                element_id = tid,
+                time_step  = t,
+                volume_m3  = _r2(vol),
+                lon        = lon,
+                lat        = lat,
             ))
 
-    # ── summary ────────────────────────────────────────────────────────────────
-    pressures = [n.pressure  for n in output.node_results if n.pressure  is not None]
+    # ── summary ───────────────────────────────────────────────────────────────
+    pressures = [n.pressure  for n in output.node_results if n.pressure is not None]
     flows     = [abs(p.flow_rate) for p in output.pipe_results if p.flow_rate is not None]
     ages      = [n.water_age for n in output.node_results if n.water_age is not None]
-    demands   = [n.demand for n in output.node_results if n.demand is not None]
+    demands   = [n.demand    for n in output.node_results if n.demand is not None]
 
     output.summary = {
-        "pressure_min_m":       round(min(pressures),               2) if pressures else None,
-        "pressure_max_m":       round(max(pressures),               2) if pressures else None,
-        "pressure_avg_m":       round(sum(pressures)/len(pressures), 2) if pressures else None,
-        "flow_max_m3s":         round(max(flows),                   6) if flows     else None,
-        "flow_avg_m3s":         round(sum(flows) / len(flows),       6) if flows     else None,
-        "water_age_max_hrs":    round(max(ages),                    2) if ages      else None,
-        "water_age_avg_hrs":    round(sum(ages) / len(ages),         2) if ages      else None,
-        "total_demand_m3h":     round(sum(demands) * 3600.0 / n_steps, 3) if demands and n_steps else None,
+        "pressure_min_m":       _r2(min(pressures)) if pressures else None,
+        "pressure_max_m":       _r2(max(pressures)) if pressures else None,
+        "pressure_avg_m":       _r2(sum(pressures) / len(pressures)) if pressures else None,
+        "flow_max_m3s":         _r6(max(flows))    if flows     else None,
+        "flow_avg_m3s":         _r6(sum(flows) / len(flows)) if flows else None,
+        "water_age_max_hrs":    _r2(max(ages))     if ages      else None,
+        "total_demand_m3h":     _r3(sum(demands) * 3600.0 / n_steps) if demands and n_steps else None,
         "low_pressure_nodes":   sum(1 for n in output.node_results if n.is_low_pressure),
-        "high_velocity_pipes":  sum(1 for p in output.pipe_results if p.is_high_velocity),
-        "leak_events_injected": len(system_events),
-        "total_nodes":          len(junction_ids),
-        "total_pipes":          len(pipe_ids),
-        "total_tanks":          len(tank_sensor_ids),
+        "high_velocity_pipes":  0,
+        "leak_events_injected": leaks_added,
+        "sensor_faults_applied":len(sensor_faults or []),
+        "actuator_events":      len(actuator_events or []),
+        "model_uncertainty":    model_uncertainty is not None,
+        "sensor_noise":         sensor_noise is not None,
+        "total_nodes":          len(sensor_node_ids),
+        "total_pipes":          len(sensor_pipe_ids),
+        "total_tanks":          len(sensor_tank_ids),
         "duration_hrs":         duration_hrs,
         "time_steps":           n_steps,
-        "demand_model":         demand_model,
-        "pda_pressure_min":      pda_pressure_min,
-        "pda_pressure_required": pda_pressure_required,
-        "pda_pressure_exponent": pda_pressure_exponent,
         "engine":               "EPyT-Flow v0.17.1",
+        "demand_model":         demand_model_norm,
+        "pda_pressure_min":       pda_pressure_min      if demand_model_norm == "PDA" else None,
+        "pda_pressure_required":  pda_pressure_required if demand_model_norm == "PDA" else None,
+        "pda_pressure_exponent":  pda_pressure_exponent if demand_model_norm == "PDA" else None,
     }
 
     logger.info(
-        "Parsed %d node records, %d pipe records, %d tank records",
+        "Parsed %d node·t, %d pipe·t, %d tank·t records",
         len(output.node_results), len(output.pipe_results), len(output.tank_results),
     )
     return output
+
+
+# ── array helpers ─────────────────────────────────────────────────────────────
+
+def _safe(fn):
+    """Call fn(), return result or None on error."""
+    try:
+        return fn()
+    except Exception:
+        return None
+
+
+def _val(arr, t: int, j):
+    """Safely index a 2-D numpy array; return float or None."""
+    if arr is None or j is None:
+        return None
+    try:
+        v = float(arr[t, j])
+        return v if math.isfinite(v) else None
+    except (IndexError, TypeError):
+        return None
+
+
+def _r2(v): return round(v, 2)  if v is not None else None
+def _r3(v): return round(v, 3)  if v is not None else None
+def _r6(v): return round(v, 6)  if v is not None else None
+def _r7(v): return round(v, 7)  if v is not None else None

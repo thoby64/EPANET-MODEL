@@ -31,15 +31,23 @@ class SimScenario(Base):
     description:   Mapped[Optional[str]] = mapped_column(Text,      nullable=True)
 
     # DMA simulation parameters (stored for reproducibility)
-    base_demand:    Mapped[float] = mapped_column(Float,   default=0.011)
+    base_demand:    Mapped[float] = mapped_column(Float,   default=0.001)
     duration_hrs:   Mapped[int]   = mapped_column(Integer, default=24)
     time_step_min:  Mapped[int]   = mapped_column(Integer, default=60)
-    leakage_frac:   Mapped[float] = mapped_column(Float,   default=0.20)
-    scenario_type:  Mapped[str]   = mapped_column(String(24), default="baseline")
-    demand_model:   Mapped[str]   = mapped_column(String(12), default="DDA")
-    pda_pressure_min:      Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    pda_pressure_required: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    pda_pressure_exponent: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    leakage_frac:   Mapped[float] = mapped_column(Float,   default=0.0, nullable=False)
+    scenario_type:  Mapped[str]   = mapped_column(String(24), default="baseline", nullable=False)
+    demand_model:   Mapped[str]   = mapped_column(String(8), default="DDA", nullable=False)
+    pda_pressure_min:      Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    pda_pressure_required: Mapped[float] = mapped_column(Float, default=0.1, nullable=False)
+    pda_pressure_exponent: Mapped[float] = mapped_column(Float, default=0.5, nullable=False)
+
+    # Network build parameters (used when a DMA is rebuilt from GIS layers).
+    pipe_status:      Mapped[str]   = mapped_column(String(32), default="OPERATIONAL")
+    reservoir_head:   Mapped[float] = mapped_column(Float, default=50.0)
+    pipe_ids:         Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    reservoir_lat:    Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    reservoir_lon:    Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    snap_tolerance_m: Mapped[float] = mapped_column(Float, default=2.0)
 
     # DMA metadata / pre-built .inp path stored here as a JSON dict.
     # Keys produced by the DMA router:

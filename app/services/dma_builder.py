@@ -14,7 +14,8 @@ Pipeline
    • Map storage tanks → [TANKS]
    • Map all other nodes → [JUNCTIONS] with IDW-interpolated elevation
    • Map repaired edges → [PIPES] (Hazen-Williams, material-derived C)
-   • Snap valves to nearest node → [VALVES] (TCV for sluice/gate)
+   • Snap valves to nearest node → pipe stub (isolation/washout throttled,
+     check valves use real CV status, air/unrecognised types stay junctions)
    • Bulk meter nodes → zero-demand junctions for NRW monitoring
    • Return inp_path + repair report (synthetic connectors)
 
@@ -115,9 +116,28 @@ def build_dma_inp(
     base_demand_m3h: float = _BASE_DEMAND_M3H,
     leakage_frac:    float = 0.20,
     snap_tol_m:      float = _SNAP_TOL_M,
+    demand_model:          str   = "DDA",
+    pda_pressure_min:      float = 0.0,
+    pda_pressure_required: float = 0.1,
+    pda_pressure_exponent: float = 0.5,
+    valve_status_overrides: Optional[Dict[int, str]] = None,
 ) -> Tuple[str, RepairReport]:
     """
     Build a fully-connected EPANET DMA model.
+
+    demand_model
+        "DDA" (default) or "PDA". When "PDA", the [OPTIONS] section
+        declares "Demand Model PDA" plus the pressure thresholds directly
+        in the .inp file itself — not just via the EPyT-Flow Python API —
+        so the model is genuinely pressure-driven regardless of whether
+        the runtime API call is honoured by the EPANET engine.
+
+    valve_status_overrides
+        Optional {valve fid: "Open"|"Closed"} map from the map inspector
+        panel. Only applies to ISOLATION/WASHOUT valves (the ones modelled
+        as throttling stubs with a real Status); CHECK valves keep their
+        one-way CV status regardless, and AIR/UNKNOWN valves have no stub
+        to set a status on.
 
     Returns
     -------
@@ -158,6 +178,12 @@ def build_dma_inp(
         return _nearest_node_id(lon, lat, nodes)
 
     source_nodes: Dict[str, DMASource]    = {_snap(s.lon, s.lat): s for s in dma.sources}
+
+    # Tanks are snapped onto the network like every other asset, but a tank
+    # that lands on a borehole (or on another tank) would reuse that node's
+    # ID — EPANET rejects duplicate node labels ("Error 215"). Such a tank
+    # therefore gets its own helper node, joined to the network by a short
+    # connector pipe.
     tank_nodes:   Dict[str, DMATank]      = {}
     tank_connector_rows: List[str]        = []
     for tank in dma.tanks:
@@ -183,6 +209,7 @@ def build_dma_inp(
                 f"  ; STORAGE CONNECTION"
             )
         tank_nodes[tank_key] = tank
+
     bm_nodes:     Dict[str, DMABulkMeter] = {_snap(b.lon, b.lat): b for b in dma.bulk_meters}
     valve_nodes:  Dict[str, DMAValve]     = {_snap(v.lon, v.lat): v for v in dma.valves}
 
@@ -200,13 +227,26 @@ def build_dma_inp(
     # ── 3a. Pre-compute valve helpers BEFORE writing any section ─────────────
     # EPANET TCV requires both nodes to already be pipe-connected, which is
     # impossible for our snapped-to-junction valve nodes.  Instead, model each
-    # isolation valve (sluice / gate) as a short 0.5 m stub pipe with:
-    #   - high minor-loss coefficient (10.0) to simulate throttling resistance
-    #   - status = Open  (field engineer can mark it Closed per scenario)
-    # Air valves → plain junctions (already handled by snapping to nearest node).
+    # valve as a short 0.5 m stub pipe, with behaviour depending on `kind`:
+    #   ISOLATION (sluice/gate/butterfly) - high minor-loss coeff (10.0),
+    #                                       Status Open (can be closed per scenario)
+    #   WASHOUT   (drain valve)           - same stub, but Status Closed by
+    #                                       default: these are normally shut and
+    #                                       only opened to flush/drain a main
+    #   CHECK     (non-return valve)      - ordinary stub (no artificial minor
+    #                                       loss), Status CV so EPANET enforces
+    #                                       one-way flow node1->node2. Flow
+    #                                       direction is taken from the nearest
+    #                                       upstream-looking pipe order in the
+    #                                       source data; verify against as-built
+    #                                       drawings if backflow direction matters.
+    #   AIR / UNKNOWN                     - no stub; valve stays a plain junction
+    #                                       (unchanged from before). UNKNOWN
+    #                                       cases are logged during ingest.
     valve_pipe_rows: List[str] = []
+    valve_status_overrides = valve_status_overrides or {}
     for key, v in valve_nodes.items():
-        if not v.is_isolation:
+        if v.kind not in ("ISOLATION", "WASHOUT", "CHECK"):
             continue
         helper_id = f"VH_{v.fid}"
         nd = nodes[key]
@@ -215,11 +255,20 @@ def build_dma_inp(
         )
         junction_keys.add(helper_id)   # VH_ is a zero-demand junction
         diam = max(25.0, v.diam_mm)
-        status = "Closed" if v.status.strip().lower() == "closed" else "Open"
-        valve_pipe_rows.append(
-            f"  VPIPE_{v.fid}  {key}  {helper_id}  0.5  {diam:.1f}  130.0  10.0  {status}"
-            f"  ; {v.valve_type}"
-        )
+        if v.kind == "CHECK":
+            # Real check valve: no artificial throttling, EPANET's CV status
+            # already enforces one-directional flow — not overridable.
+            valve_pipe_rows.append(
+                f"  VPIPE_{v.fid}  {key}  {helper_id}  0.5  {diam:.1f}  130.0  0  CV"
+                f"  ; {v.valve_type}"
+            )
+        else:
+            default_status = "Closed" if v.kind == "WASHOUT" else "Open"
+            status = valve_status_overrides.get(v.fid, default_status)
+            valve_pipe_rows.append(
+                f"  VPIPE_{v.fid}  {key}  {helper_id}  0.5  {diam:.1f}  130.0  10.0  {status}"
+                f"  ; {v.valve_type}"
+            )
 
     # ── 3. write .inp ─────────────────────────────────────────────────────────
     if inp_dir is None:
@@ -248,7 +297,7 @@ def build_dma_inp(
         is_bm    = key in bm_nodes
         demand   = 0.0 if is_bm else demand_m3h
         elev     = round(_idw_elev(lon, lat, dma.sources, dma.tanks, avg_src_elev), 1)
-        inp.row(key, elev, round(demand, 6), "")
+        inp.row(key, elev, round(demand, 6), "DIURNAL")
 
     # RESERVOIRS (boreholes)
     inp.section("RESERVOIRS")
@@ -280,10 +329,11 @@ def build_dma_inp(
             f"  {e.edge_id}  {e.node_a}  {e.node_b}  "
             f"{round(length,2)}  {round(e.diam_mm,1)}  {round(e.hw_c,1)}  0  Open" + suffix
         )
-    # Preserve storage facilities that share a snapped network node with a
-    # source or another tank by attaching a dedicated EPANET tank node.
+    # Storage facilities that share a snapped node with a borehole or another
+    # tank keep their own EPANET tank node, joined by a connector pipe.
     for trow in tank_connector_rows:
         inp.raw(trow)
+
     # Valve stubs (isolation valves as short high-minor-loss pipes)
     for vrow in valve_pipe_rows:
         inp.raw(vrow)
@@ -303,7 +353,7 @@ def build_dma_inp(
         1.0, 1.1, 1.0, 0.9, 1.0, 1.3,
         1.4, 1.2, 1.0, 0.8, 0.6, 0.4,
     ]
-    inp.row(";DIURNAL", " ".join(str(v) for v in diurnal))
+    inp.row("DIURNAL", *[f"{v:.2f}" for v in diurnal])
 
     inp.section("ENERGY")
     inp.raw("  Global Efficiency  75")
@@ -349,6 +399,12 @@ def build_dma_inp(
     inp.raw("  Quality           Age")
     inp.raw("  Diffusivity       1")
     inp.raw("  Tolerance         0.01")
+    demand_model_norm = (demand_model or "DDA").strip().upper()
+    if demand_model_norm == "PDA":
+        inp.raw("  Demand Model      PDA")
+        inp.raw(f"  Minimum Pressure  {pda_pressure_min}")
+        inp.raw(f"  Required Pressure {pda_pressure_required}")
+        inp.raw(f"  Pressure Exponent {pda_pressure_exponent}")
 
     # COORDINATES — all nodes including TCV helper stubs
     inp.section("COORDINATES")

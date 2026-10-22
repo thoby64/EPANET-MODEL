@@ -44,6 +44,7 @@ class MajiScopePreparedGpkg(BaseModel):
     inp_original_filename: str | None = None
     inp_sha256: str | None = None
     inp_network: dict[str, Any] | None = None
+    model_source: str = "gpkg"
     layers: list[str]
     feature_counts: dict[str, int]
     message: str
@@ -70,7 +71,15 @@ def _hash_launch_token(secret: str, token: str) -> str:
     return hashlib.sha256(f"{secret}:{token}".encode("utf-8")).hexdigest()
 
 
-def _read_first_layer(path: str):
+def _read_first_layer(path: str, layer_name: str | None = None):
+    """Read a GeoPackage layer.
+
+    An uploaded asset file can carry more than one layer. Reading it without
+    naming the layer silently picks the *first* table in the file, which can
+    be a completely different asset (a DMA boundary, for example). The layer
+    that matches the asset type is therefore requested explicitly, with a
+    fallback to the first layer for files that only carry one.
+    """
     try:
         import geopandas as gpd
     except ImportError as exc:
@@ -78,6 +87,17 @@ def _read_first_layer(path: str):
             status_code=500,
             detail="GeoPandas is required by the hydraulic service to prepare MajiScope model files.",
         ) from exc
+
+    if layer_name:
+        try:
+            return gpd.read_file(path, layer=layer_name, on_invalid="ignore")
+        except TypeError:
+            try:
+                return gpd.read_file(path, layer=layer_name)
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     try:
         return gpd.read_file(path, on_invalid="ignore")
@@ -126,8 +146,8 @@ def _boundary_with_tolerance(boundary):
     return gpd.GeoSeries([buffered], crs="EPSG:3857").to_crs("EPSG:4326").iloc[0]
 
 
-def _filter_to_boundary(asset_path: str, boundary):
-    gdf = _read_first_layer(asset_path)
+def _filter_to_boundary(asset_path: str, boundary, layer_name: str | None = None):
+    gdf = _read_first_layer(asset_path, layer_name)
     if gdf.empty:
         return gdf
     if gdf.crs is None:
@@ -217,7 +237,7 @@ async def validate_majiscope_gpkg(
                 continue
 
             layer_name = _ASSET_LAYER_MAP[asset_type]
-            filtered = _filter_to_boundary(asset_path, boundary)
+            filtered = _filter_to_boundary(asset_path, boundary, layer_name)
             feature_counts[layer_name] = int(len(filtered))
 
     return MajiScopeGpkgValidation(
@@ -242,6 +262,7 @@ async def prepare_majiscope_gpkg(
     bulk_meters: UploadFile | None = File(None),
     inp_file: UploadFile | None = File(None),
     reported_leaks_geojson: str | None = Form(None),
+    model_source: str = Form("gpkg"),
     _: str = Depends(require_api_key),
 ):
     settings = get_settings()
@@ -311,7 +332,7 @@ async def prepare_majiscope_gpkg(
                 continue
 
             layer_name = _ASSET_LAYER_MAP[asset_type]
-            filtered = _filter_to_boundary(asset_path, boundary)
+            filtered = _filter_to_boundary(asset_path, boundary, layer_name)
             count = int(len(filtered))
             feature_counts[layer_name] = count
 
@@ -370,6 +391,7 @@ async def prepare_majiscope_gpkg(
                 "inp_original_filename": inp_original_filename,
                 "inp_sha256": inp_sha256,
                 "inp_network": inp_network,
+                "model_source": model_source,
             },
             handle,
             indent=2,
@@ -381,6 +403,7 @@ async def prepare_majiscope_gpkg(
         inp_original_filename=inp_original_filename,
         inp_sha256=inp_sha256,
         inp_network=inp_network,
+        model_source=model_source,
         layers=written_layers,
         feature_counts=feature_counts,
         message="Temporary hydraulic model GeoPackage prepared.",
