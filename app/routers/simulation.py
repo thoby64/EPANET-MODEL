@@ -35,10 +35,11 @@ from app.core.auth import require_api_key
 from app.core.database import get_db
 from app.core.exceptions import SimulationNotFoundError, SimulationStillRunningError
 from app.core.scenario_types import ALL_SCENARIO_TYPES, REPORTED_LEAK, validate_scenario_contract
-from app.models.simulation import SimResult, SimScenario
+from app.models.simulation import SimReport, SimResult, SimScenario
 from app.services.report_plots import plot_node_pressure, plot_pipe_flow
 from app.services.rpt_parser import (
     parse_rpt_file,
+    parse_rpt_text,
     persisted_report_path,
     rpt_nrw_summary,
 )
@@ -233,6 +234,32 @@ class AlertsResponse(BaseModel):
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
+
+async def _report_text_for(scenario_id: int, db: AsyncSession) -> str:
+    """The EPANET report text for a scenario.
+
+    The report is kept twice: as a file in ``settings.reports_dir`` and as a
+    row in ``sim_reports``. The file is preferred (it is what the download
+    endpoint streams), but it may be missing — the reports directory can sit
+    on an ephemeral volume, and EPANET itself cannot always write its report
+    file. The database copy is the authoritative fallback, so "view report"
+    and "download report" always work for a finished run.
+    """
+    path = persisted_report_path(scenario_id)
+    try:
+        if os.path.isfile(path):
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                text = handle.read()
+            if text.strip():
+                return text
+    except OSError:
+        pass
+
+    row = await db.get(SimReport, scenario_id)
+    if row is not None and row.text:
+        return row.text
+    return ""
+
 
 async def _get_or_404(scenario_id: int, db: AsyncSession) -> SimScenario:
     s = await db.get(SimScenario, scenario_id)
@@ -551,14 +578,13 @@ async def get_report_text(
     s = await _get_or_404(scenario_id, db)
     if s.status != "DONE":
         raise SimulationStillRunningError(scenario_id)
-    path = persisted_report_path(scenario_id)
-    if not os.path.isfile(path):
+    text = await _report_text_for(scenario_id, db)
+    if not text.strip():
         raise HTTPException(
             status_code=404,
             detail=f"No .rpt report was persisted for scenario {scenario_id}.",
         )
-    with open(path, encoding="utf-8", errors="replace") as f:
-        return f.read()
+    return text
 
 
 @router.get("/{scenario_id}/report/download")
@@ -572,15 +598,26 @@ async def download_report(
     if s.status != "DONE":
         raise SimulationStillRunningError(scenario_id)
     path = persisted_report_path(scenario_id)
-    if not os.path.isfile(path):
+    if os.path.isfile(path):
+        return FileResponse(
+            path,
+            media_type="text/plain",
+            filename=f"scenario_{scenario_id}.rpt",
+        )
+    # The file is gone (ephemeral volume, failed copy, ...) — stream the copy
+    # that is stored in the database instead.
+    text = await _report_text_for(scenario_id, db)
+    if not text.strip():
         raise HTTPException(
             status_code=404,
             detail=f"No .rpt report was persisted for scenario {scenario_id}.",
         )
-    return FileResponse(
-        path,
+    return Response(
+        content=text,
         media_type="text/plain",
-        filename=f"scenario_{scenario_id}.rpt",
+        headers={
+            "Content-Disposition": f'attachment; filename="scenario_{scenario_id}.rpt"'
+        },
     )
 
 
@@ -600,6 +637,10 @@ async def get_report_summary(
         raise SimulationStillRunningError(scenario_id)
     path = persisted_report_path(scenario_id)
     rpt = parse_rpt_file(path)
+    if not rpt:
+        # The file may be missing — parse the copy kept in the database.
+        text = await _report_text_for(scenario_id, db)
+        rpt = parse_rpt_text(text) if text else None
     if not rpt:
         raise HTTPException(
             status_code=404,

@@ -18,6 +18,9 @@ import logging
 import math
 import os
 import re
+import sys
+import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -687,6 +690,111 @@ class SimulationOutput:
     pipe_results:  List[PipeResult]  = field(default_factory=list)
     tank_results:  List[TankResult]  = field(default_factory=list)
     summary:       dict              = field(default_factory=dict)
+    # The EPANET .rpt text produced by this run. EPANET writes it next to the
+    # .inp as "<inp>.rpt"; when it cannot open that file it falls back to
+    # stdout, so the text is captured either way and handed to the caller.
+    report_text:   str               = ""
+
+
+# ── EPANET report capture ────────────────────────────────────────────────────
+
+class _StdoutCapture:
+    """Capture everything written to stdout (file descriptor 1) while EPANET runs.
+
+    EPANET writes its report to ``<inp>.rpt``. When that file cannot be
+    opened — a read-only volume, a missing directory, a permissions problem —
+    EPANET falls back to printing the whole report to stdout instead, and the
+    report file is never created.
+
+    This captures the real file descriptor (not just ``sys.stdout``) so the C
+    library's ``printf`` calls are caught too. The captured bytes are kept so
+    they can serve as the report, and they are replayed to stdout afterwards
+    so nothing is lost from the service log.
+    """
+
+    def __init__(self) -> None:
+        self.text: str = ""
+        self._saved_fd: int = -1
+        self._tmp = None
+
+    def __enter__(self) -> "_StdoutCapture":
+        try:
+            sys.stdout.flush()
+        except Exception:
+            pass
+        self._saved_fd = os.dup(1)
+        self._tmp = tempfile.TemporaryFile()
+        os.dup2(self._tmp.fileno(), 1)
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        try:
+            sys.stdout.flush()
+        except Exception:
+            pass
+        try:
+            os.dup2(self._saved_fd, 1)
+        finally:
+            try:
+                os.close(self._saved_fd)
+            except Exception:
+                pass
+        captured = b""
+        try:
+            self._tmp.seek(0)
+            captured = self._tmp.read()
+        except Exception:
+            captured = b""
+        finally:
+            try:
+                self._tmp.close()
+            except Exception:
+                pass
+        # Put the captured output back into the service log.
+        if captured:
+            try:
+                os.write(1, captured)
+            except Exception:
+                pass
+        self.text = captured.decode("utf-8", errors="replace")
+        return False
+
+
+def _read_report_file(inp_path: str) -> str:
+    """Read the EPANET .rpt file that belongs to `inp_path` (if it exists)."""
+    path = inp_path + ".rpt"
+    try:
+        if not os.path.isfile(path):
+            return ""
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+
+def _report_text_from_stdout(captured) -> str:
+    """Pick the EPANET report out of captured stdout.
+
+    EPANET prints the report as plain text, but the capture window also
+    contains anything else the service logged, so the report is located by
+    its first heading.
+
+    Accepts either bytes or str.
+    """
+    if not captured:
+        return ""
+    if isinstance(captured, (bytes, bytearray)):
+        text = bytes(captured).decode("utf-8", errors="replace")
+    else:
+        text = str(captured)
+    for marker in ("  Hydraulic Flow Balance", "Hydraulic Flow Balance",
+                   "  Page 1", "Analysis ended"):
+        idx = text.find(marker)
+        if idx != -1:
+            # back up to the start of that line
+            start = text.rfind("\n", 0, idx) + 1
+            return text[start:]
+    return text
 
 
 # ── main runner ───────────────────────────────────────────────────────────────
@@ -878,93 +986,96 @@ def run_simulation(
 
 
     # ── pass 2: full simulation ───────────────────────────────────────────────
-    with ScenarioSimulator(f_inp_in=inp_path) as sim:
-        sim.set_general_parameters(
-            simulation_duration = duration_sec,
-            hydraulic_time_step = time_step_sec,
-            reporting_time_step = time_step_sec,
-            demand_model        = demand_model_dict,
-        )
+    # EPANET writes its .rpt report when the EPyT session closes. When it
+    # cannot open that file it prints the report to stdout instead, so stdout
+    # is captured here and used as the fallback source for the report text.
+    with _StdoutCapture() as stdout_capture:
+        with ScenarioSimulator(f_inp_in=inp_path) as sim:
+            sim.set_general_parameters(
+                simulation_duration = duration_sec,
+                hydraulic_time_step = time_step_sec,
+                reporting_time_step = time_step_sec,
+                demand_model        = demand_model_dict,
+            )
 
-        # Demand model (DDA/PDA) is set two ways, both confirmed to actually
-        # work (unlike a third approach that was tried and removed — the
-        # EPyT-Flow `epanet_api` object here is its own `EPyT` wrapper class,
-        # which does not expose a `setDemandModel` method, confirmed by an
-        # AttributeError in production logs):
-        #   1. sim.set_general_parameters(demand_model=...) just above,
-        #      EPyT-Flow's own documented API for this.
-        #   2. The .inp file's own [OPTIONS] section declares
-        #      "Demand Model PDA" directly when requested (see
-        #      dma_builder.build_dma_inp) — this is authoritative because
-        #      it's EPANET's native mechanism and doesn't depend on the
-        #      Python wrapper propagating the setting correctly.
+            # Demand model (DDA/PDA) is set two ways, both confirmed to actually
+            # work (unlike a third approach that was tried and removed — the
+            # EPyT-Flow `epanet_api` object here is its own `EPyT` wrapper class,
+            # which does not expose a `setDemandModel` method, confirmed by an
+            # AttributeError in production logs):
+            #   1. sim.set_general_parameters(demand_model=...) just above,
+            #      EPyT-Flow's own documented API for this.
+            #   2. The .inp file's own [OPTIONS] section declares
+            #      "Demand Model PDA" directly when requested (see
+            #      dma_builder.build_dma_inp) — this is authoritative because
+            #      it's EPANET's native mechanism and doesn't depend on the
+            #      Python wrapper propagating the setting correctly.
 
-        # ── sensors: everything ───────────────────────────────────────────────
-        sim.place_pressure_sensors_everywhere()
-        sim.place_flow_sensors_everywhere()
-        sim.place_demand_sensors_everywhere()
-        sim.place_node_quality_sensors_everywhere()   # water age
-        sim.place_link_quality_sensors_everywhere()
-        if all_tank_ids:
-            sim.place_tank_sensors_everywhere()
-        if all_valve_ids:
-            sim.place_valve_sensors_everywhere()
-        if all_pump_ids:
-            sim.place_pump_sensors_everywhere()
-            sim.place_pump_state_sensors_everywhere()
+            # ── sensors: everything ───────────────────────────────────────────────
+            sim.place_pressure_sensors_everywhere()
+            sim.place_flow_sensors_everywhere()
+            sim.place_demand_sensors_everywhere()
+            sim.place_node_quality_sensors_everywhere()   # water age
+            sim.place_link_quality_sensors_everywhere()
+            if all_tank_ids:
+                sim.place_tank_sensors_everywhere()
+            if all_valve_ids:
+                sim.place_valve_sensors_everywhere()
+            if all_pump_ids:
+                sim.place_pump_sensors_everywhere()
+                sim.place_pump_state_sensors_everywhere()
 
-        # ── leakage events ────────────────────────────────────────────────────
-        leaks_added = 0
-        for lk in all_leakages:
-            try:
-                sim.add_leakage(lk)
-                leaks_added += 1
-            except Exception as e:
-                logger.warning("Could not add leakage %s: %s", lk, e)
+            # ── leakage events ────────────────────────────────────────────────────
+            leaks_added = 0
+            for lk in all_leakages:
+                try:
+                    sim.add_leakage(lk)
+                    leaks_added += 1
+                except Exception as e:
+                    logger.warning("Could not add leakage %s: %s", lk, e)
 
-        # ── sensor faults ─────────────────────────────────────────────────────
-        for sf in (sensor_faults or []):
-            try:
-                sim.add_sensor_fault(sf)
-            except Exception as e:
-                logger.warning("Could not add sensor fault: %s", e)
+            # ── sensor faults ─────────────────────────────────────────────────────
+            for sf in (sensor_faults or []):
+                try:
+                    sim.add_sensor_fault(sf)
+                except Exception as e:
+                    logger.warning("Could not add sensor fault: %s", e)
 
-        # ── actuator events ───────────────────────────────────────────────────
-        for ae in (actuator_events or []):
-            try:
-                sim.add_actuator_event(ae)
-            except Exception as e:
-                logger.warning("Could not add actuator event: %s", e)
+            # ── actuator events ───────────────────────────────────────────────────
+            for ae in (actuator_events or []):
+                try:
+                    sim.add_actuator_event(ae)
+                except Exception as e:
+                    logger.warning("Could not add actuator event: %s", e)
 
-        # ── uncertainties ─────────────────────────────────────────────────────
-        if model_uncertainty is not None:
-            try:
-                sim.set_model_uncertainty(model_uncertainty)
-            except Exception as e:
-                logger.warning("Could not apply model uncertainty: %s", e)
-        if sensor_noise is not None:
-            try:
-                sim.set_sensor_noise(sensor_noise)
-            except Exception as e:
-                logger.warning("Could not apply sensor noise: %s", e)
+            # ── uncertainties ─────────────────────────────────────────────────────
+            if model_uncertainty is not None:
+                try:
+                    sim.set_model_uncertainty(model_uncertainty)
+                except Exception as e:
+                    logger.warning("Could not apply model uncertainty: %s", e)
+            if sensor_noise is not None:
+                try:
+                    sim.set_sensor_noise(sensor_noise)
+                except Exception as e:
+                    logger.warning("Could not apply sensor noise: %s", e)
 
-        # ── run ───────────────────────────────────────────────────────────────
-        logger.info("Running EPyT-Flow simulation …")
-        scada = sim.run_simulation()
-        logger.info("EPyT-Flow simulation complete.")
+            # ── run ───────────────────────────────────────────────────────────────
+            logger.info("Running EPyT-Flow simulation …")
+            scada = sim.run_simulation()
+            logger.info("EPyT-Flow simulation complete.")
 
-        # ── extract arrays ────────────────────────────────────────────────────
-        sc_out           = scada.sensor_config
-        sensor_node_ids  = list(sc_out.pressure_sensors)
-        sensor_pipe_ids  = list(sc_out.flow_sensors)
-        sensor_tank_ids  = list(getattr(sc_out, "tank_volume_sensors", []) or [])
+            # ── extract arrays ────────────────────────────────────────────────────
+            sc_out           = scada.sensor_config
+            sensor_node_ids  = list(sc_out.pressure_sensors)
+            sensor_pipe_ids  = list(sc_out.flow_sensors)
+            sensor_tank_ids  = list(getattr(sc_out, "tank_volume_sensors", []) or [])
 
-        pressure_arr = _safe(scada.get_data_pressures)
-        flow_arr     = _safe(scada.get_data_flows)
-        quality_arr  = _safe(scada.get_data_nodes_quality)
-        demand_arr   = _safe(scada.get_data_demands)
-        tank_vol_arr = _safe(scada.get_data_tanks_water_volume) if sensor_tank_ids else None
-
+            pressure_arr = _safe(scada.get_data_pressures)
+            flow_arr     = _safe(scada.get_data_flows)
+            quality_arr  = _safe(scada.get_data_nodes_quality)
+            demand_arr   = _safe(scada.get_data_demands)
+            tank_vol_arr = _safe(scada.get_data_tanks_water_volume) if sensor_tank_ids else None
     n_steps = pressure_arr.shape[0] if pressure_arr is not None else 0
     logger.info("Parsing %d time steps × %d nodes × %d pipes", n_steps, len(sensor_node_ids), len(sensor_pipe_ids))
 
@@ -1064,6 +1175,26 @@ def run_simulation(
         "Parsed %d node·t, %d pipe·t, %d tank·t records",
         len(output.node_results), len(output.pipe_results), len(output.tank_results),
     )
+
+    # ── the EPANET report text ───────────────────────────────────────────────
+    # From the file next to the .inp when EPANET could write it, otherwise
+    # from the stdout capture (EPANET prints the report there when it cannot
+    # open its report file). Either way the report survives the temp folder.
+    report_text = _read_report_file(inp_path)
+    report_source = "file"
+    if not report_text:
+        report_text = _report_text_from_stdout(stdout_capture.text)
+        report_source = "stdout"
+    if report_text:
+        output.report_text = report_text
+        logger.info(
+            "Captured EPANET report text from %s (%d bytes)", report_source, len(report_text)
+        )
+    else:
+        logger.warning(
+            "[%s] No EPANET report text could be captured (neither a .rpt file nor stdout output)",
+            inp_path,
+        )
     return output
 
 

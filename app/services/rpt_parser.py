@@ -123,6 +123,22 @@ def parse_rpt_file(rpt_path: str) -> Optional[RptData]:
     except OSError:
         return None
 
+    return parse_rpt_text(text)
+
+
+def parse_rpt_text(text: str) -> Optional[RptData]:
+    """
+    Parse EPANET report *text*.
+
+    Used when the report only exists as text — for instance the copy kept in
+    the `sim_reports` database table, which is the fallback whenever the
+    .rpt file is not available on disk.
+
+    Returns None when the text does not look like an EPANET report.
+    """
+    if not text or not text.strip():
+        return None
+
     result = RptData()
 
     # ── flow balance ──────────────────────────────────────────────────────────

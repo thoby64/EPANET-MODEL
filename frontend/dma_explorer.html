@@ -27,6 +27,9 @@
             --green2: #104028;
             --purple: #7b6ff0;
             --blue: #50a0d8;
+            /* Reported leaks — a vivid azure, deliberately different from the
+               muted steel blue of the storage-tank diamonds. */
+            --leak: #2e86e8;
             --teal: #1eb8a0;
             --orange: #d06030;
             --mono: 'JetBrains Mono', monospace;
@@ -56,6 +59,7 @@
             --green2: #d1fae5;
             --purple: #6d5fe0;
             --blue: #1d6fa8;
+            --leak: #1a56d4;
             --teal: #0f9c88;
             --orange: #c2551f;
             --glass: rgba(255, 255, 255, .92);
@@ -814,7 +818,7 @@
             flex-shrink: 0
         }
         .leg-drop path {
-            fill: var(--red);
+            fill: var(--leak);
             stroke: none
         }
         .leg-dot {
@@ -3577,7 +3581,7 @@
                     updateReportedLeakLayerControl(0);
                     return;
                 }
-                const colour = var_("--red") || "#e04840";
+                const colour = var_("--leak") || "#2e86e8";
                 L.geoJSON({ type: "FeatureCollection", features: points }, {
                     pointToLayer: (f, latlng) => new L.LeakMarker(latlng, {
                         radius: 6.5,

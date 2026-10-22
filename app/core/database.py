@@ -76,7 +76,7 @@ async def init_db() -> None:
     existing one — so a pre-existing data/db/epanet_service.db needs
     this tiny migration the first time it starts with the new code)."""
     async with engine.begin() as conn:
-        from app.models.simulation import SimScenario, SimResult  # noqa: F401
+        from app.models.simulation import SimReport, SimResult, SimScenario  # noqa: F401
         await conn.run_sync(Base.metadata.create_all)
         await _ensure_sim_scenarios_columns(conn)
         await _ensure_sim_results_columns(conn)

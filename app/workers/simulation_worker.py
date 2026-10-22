@@ -48,7 +48,7 @@ from app.core.config import get_settings
 from app.core.database import get_session
 from app.core.scenario_types import ALL_SCENARIO_TYPES, RANDOM_LEAKS_ALLOWED_FOR, REPORTED_LEAK
 from app.core.tz import utc_isoformat
-from app.models.simulation import SimResult, SimScenario
+from app.models.simulation import SimReport, SimResult, SimScenario
 from app.services.leak_report import compute_service_impact, recommend_isolation
 from app.services.leakage_report import analyse_leakage
 from app.services.rpt_parser import parse_rpt, persisted_report_path, rpt_nrw_summary
@@ -56,6 +56,18 @@ from app.services.simulation_service import run_simulation
 
 logger = logging.getLogger(__name__)
 BATCH_SIZE = 500
+
+
+def _read_report_text_file(inp_path: str) -> str:
+    """Read the EPANET .rpt file that belongs to `inp_path`, if present."""
+    path = inp_path + ".rpt"
+    try:
+        if not os.path.isfile(path):
+            return ""
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            return handle.read()
+    except OSError:
+        return ""
 
 
 def _execution_duration_seconds(scenario: SimScenario) -> float | None:
@@ -976,23 +988,51 @@ async def run_simulation_task(scenario_id: int) -> None:
                     "isolation_recommendations": isolation,
                 }
 
-            # Persist the raw .rpt file itself (not just the parsed summary)
-            # so the user can view/download the full EPANET report after the
-            # temp .inp/.rpt working directory is cleaned up below.
-            rpt_src = inp_path + ".rpt"
-            report_available = False
-            if os.path.isfile(rpt_src):
+            # Persist the raw EPANET report so the user can view and download
+            # it after the temp working directory is cleaned up below.
+            #
+            # Two copies are kept on purpose:
+            #   1. the file in settings.reports_dir — what the download
+            #      endpoint streams as an attachment;
+            #   2. the text in the database — the authoritative copy, because
+            #      the reports directory may live on an ephemeral volume and
+            #      EPANET itself sometimes cannot write its report file at
+            #      all (it then prints the report to stdout instead, which is
+            #      captured by the simulation service).
+            report_text = output.report_text or ""
+            if not report_text:
+                report_text = _read_report_text_file(inp_path)
+
+            report_available = bool(report_text)
+            if report_text:
                 settings = get_settings()
                 try:
                     os.makedirs(settings.reports_dir, exist_ok=True)
-                    from app.services.rpt_parser import persisted_report_path
-                    shutil.copy2(rpt_src, persisted_report_path(scenario_id))
-                    report_available = True
-                except OSError as copy_exc:
+                    with open(persisted_report_path(scenario_id), "w",
+                              encoding="utf-8", errors="replace") as report_file:
+                        report_file.write(report_text)
+                except OSError as write_exc:
                     logger.warning(
-                        "[%d] Could not persist .rpt file: %s", scenario_id, copy_exc
+                        "[%d] Could not write the .rpt file: %s", scenario_id, write_exc
                     )
+                try:
+                    await session.merge(SimReport(
+                        scenario_id = scenario_id,
+                        text        = report_text,
+                        size_bytes  = len(report_text.encode("utf-8", errors="replace")),
+                    ))
+                except Exception as db_exc:
+                    logger.warning(
+                        "[%d] Could not store the report text in the database: %s",
+                        scenario_id, db_exc,
+                    )
+            else:
+                logger.warning(
+                    "[%d] No EPANET report text was produced — the report will not "
+                    "be available for viewing or download", scenario_id,
+                )
             merged_summary["report_available"] = report_available
+            merged_summary["report_bytes"] = len(report_text.encode("utf-8", errors="replace")) if report_text else 0
 
             scenario.summary = merged_summary
             await session.commit()

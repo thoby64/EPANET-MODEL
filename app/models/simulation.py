@@ -106,3 +106,25 @@ class SimResult(Base):
     volume_m3:        Mapped[Optional[float]] = mapped_column(Float,   nullable=True)
 
     scenario: Mapped["SimScenario"] = relationship("SimScenario", back_populates="results")
+
+
+class SimReport(Base):
+    """The EPANET .rpt text belonging to a simulation scenario.
+
+    The raw report is also copied to ``settings.reports_dir`` so it can be
+    downloaded as a file, but that directory may sit on an ephemeral volume
+    (or the copy may fail), and EPANET itself falls back to stdout when it
+    cannot open its report file. Keeping the text in the database makes the
+    report authoritative: the ``/simulate/{id}/report`` endpoints fall back
+    to this row whenever the file is missing.
+    """
+
+    __tablename__ = "sim_reports"
+
+    scenario_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("sim_scenarios.id", ondelete="CASCADE"), primary_key=True
+    )
+    text:        Mapped[str] = mapped_column(Text, nullable=False, default="")
+    size_bytes:  Mapped[int] = mapped_column(Integer, default=0)
+    truncated:   Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at:  Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
