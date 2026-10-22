@@ -22,13 +22,37 @@ from app.services.simulation_service import (
 pytest.importorskip("epanet_plus", reason="epyt-flow is not installed")
 from epanet_plus.epanet_toolkit import EPyT  # noqa: E402
 
-# A trimmed but faithful excerpt of what EPANET prints when it falls back to
-# stdout: the page header, the flow balance and the closing line.
+# A faithful excerpt of what EPANET prints when it falls back to stdout: the
+# page header, the EPANET banner, the input data summary, the hydraulic
+# status, the flow balance and the closing line.
 EPANET_REPORT_SAMPLE = """  Page 1                                    Thu Oct 22 11:57:04 2026
+
+  ******************************************************************
+  *                           E P A N E T                          *
+  *                   Hydraulic and Water Quality                  *
+  *                          Version 2.3.05                        *
+  ******************************************************************
+
+  DUWASA Nzuguni DMA DMA Hydraulic Simulation
+
+      Input Data File ................... /tmp/dma_epyt_uo8wad5i/dma_network.inp
+      Number of Junctions................ 361
+      Number of Pipes ................... 486
+
+  Analysis begun Thu Oct 22 11:57:04 2026
+
+  Hydraulic Status:
+  -----------------------------------------------------------------------
+     0:00:00: Balanced after 17 trials
+
   Hydraulic Flow Balance (m3/h)
   ================================
   Total Inflow:           151.414
-  Consumer Demand:          3.548
+  ================================
+
+  Water Quality Mass Balance (hrs)
+  ================================
+  Total Segments:     339
   ================================
 
   Analysis ended Thu Oct 22 11:57:04 2026
@@ -65,13 +89,33 @@ def test_captured_output_is_replayed_to_stdout(capfd):
     assert "logged-line-inside-the-capture" in out
 
 
-def test_report_text_is_picked_out_of_the_captured_output():
+def test_the_whole_report_is_recovered_from_the_captured_output():
+    """The fallback must return the FULL report, not just its tail."""
     text = _report_text_from_stdout(
         "some log line\n" + EPANET_REPORT_SAMPLE + "trailing noise\n"
     )
+    # the whole document, from the first page header to "Analysis ended"
+    assert text.lstrip().startswith("Page 1")
+    assert "E P A N E T" in text
+    assert "Number of Junctions" in text
+    assert "Hydraulic Status" in text
     assert "Hydraulic Flow Balance" in text
+    assert "Water Quality Mass Balance" in text
     assert "Analysis ended" in text
+    # ... and nothing else
     assert not text.startswith("some log line")
+    assert "trailing noise" not in text
+
+
+def test_the_services_own_log_lines_are_filtered_out():
+    """Log lines interleaved with the report must not leak into it."""
+    captured = (
+        "2026-10-22 11:57:05,279  INFO      app.services.simulation_service — "
+        "EPyT-Flow simulation complete.\n" + EPANET_REPORT_SAMPLE
+    )
+    text = _report_text_from_stdout(captured)
+    assert "E P A N E T" in text
+    assert "EPyT-Flow simulation complete." not in text
 
 
 def test_report_text_from_stdout_accepts_bytes():

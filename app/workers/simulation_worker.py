@@ -57,6 +57,11 @@ from app.services.simulation_service import run_simulation
 logger = logging.getLogger(__name__)
 BATCH_SIZE = 500
 
+# Upper bound for the report text kept in the database. The file in
+# settings.reports_dir always holds the complete report; this only limits
+# the fallback copy so a single enormous report cannot bloat the database.
+MAX_REPORT_TEXT_BYTES = 8 * 1024 * 1024
+
 
 def _read_report_text_file(inp_path: str) -> str:
     """Read the EPANET .rpt file that belongs to `inp_path`, if present."""
@@ -1016,10 +1021,28 @@ async def run_simulation_task(scenario_id: int) -> None:
                         "[%d] Could not write the .rpt file: %s", scenario_id, write_exc
                     )
                 try:
+                    # The database copy is a safety net, not the primary
+                    # store: the file on disk keeps the full text. Cap the
+                    # stored copy so one huge report cannot bloat the
+                    # database — anything above the cap is flagged.
+                    encoded_size = len(report_text.encode("utf-8", errors="replace"))
+                    stored_text = report_text
+                    truncated = False
+                    if encoded_size > MAX_REPORT_TEXT_BYTES:
+                        stored_text = report_text.encode(
+                            "utf-8", errors="replace"
+                        )[:MAX_REPORT_TEXT_BYTES].decode("utf-8", errors="ignore")
+                        truncated = True
+                        logger.warning(
+                            "[%d] Report text is %d bytes — only the first %d bytes "
+                            "were stored in the database (the file on disk keeps it all)",
+                            scenario_id, encoded_size, MAX_REPORT_TEXT_BYTES,
+                        )
                     await session.merge(SimReport(
                         scenario_id = scenario_id,
-                        text        = report_text,
-                        size_bytes  = len(report_text.encode("utf-8", errors="replace")),
+                        text        = stored_text,
+                        size_bytes  = encoded_size,
+                        truncated   = truncated,
                     ))
                 except Exception as db_exc:
                     logger.warning(

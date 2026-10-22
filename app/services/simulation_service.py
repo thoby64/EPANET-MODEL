@@ -772,12 +772,25 @@ def _read_report_file(inp_path: str) -> str:
         return ""
 
 
-def _report_text_from_stdout(captured) -> str:
-    """Pick the EPANET report out of captured stdout.
+# Our own log lines look like "2026-10-22 11:57:05,368  INFO      module — msg".
+# They can end up inside the captured stdout, so they are filtered out when
+# the EPANET report is recovered from it.
+_OWN_LOG_LINE = re.compile(
+    r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d+\s+(DEBUG|INFO|WARNING|ERROR|CRITICAL)\b"
+)
 
-    EPANET prints the report as plain text, but the capture window also
-    contains anything else the service logged, so the report is located by
-    its first heading.
+
+def _report_text_from_stdout(captured) -> str:
+    """Recover the complete EPANET report from captured stdout.
+
+    When EPANET cannot open its report file it prints the whole report to
+    stdout instead. The capture window also holds whatever else the service
+    logged, so the report is delimited: it starts at EPANET's first page
+    header and ends after "Analysis ended".
+
+    The result is the *full* report — the EPANET banner, the input data
+    summary, the hydraulic status lines, the flow balance and the water
+    quality mass balance — exactly as the .rpt file would have contained it.
 
     Accepts either bytes or str.
     """
@@ -787,14 +800,39 @@ def _report_text_from_stdout(captured) -> str:
         text = bytes(captured).decode("utf-8", errors="replace")
     else:
         text = str(captured)
-    for marker in ("  Hydraulic Flow Balance", "Hydraulic Flow Balance",
-                   "  Page 1", "Analysis ended"):
+
+    # ── the start: EPANET's first page header ──
+    start = -1
+    for marker in ("  Page 1", "Page 1", "****"):
         idx = text.find(marker)
         if idx != -1:
-            # back up to the start of that line
             start = text.rfind("\n", 0, idx) + 1
-            return text[start:]
-    return text
+            break
+    if start == -1:
+        # No recognisable header — keep everything we captured.
+        return _strip_own_log_lines(text)
+
+    body = text[start:]
+
+    # ── the end: after "Analysis ended" ──
+    idx = body.find("Analysis ended")
+    if idx != -1:
+        newline = body.find("\n", idx)
+        body = body if newline == -1 else body[: newline + 1]
+
+    return _strip_own_log_lines(body)
+
+
+def _strip_own_log_lines(text: str) -> str:
+    """Remove the service's own log lines from a captured stdout block."""
+    if not text:
+        return ""
+    kept = [line for line in text.splitlines() if not _OWN_LOG_LINE.match(line)]
+    # Keep the trailing newline of the original text.
+    joined = "\n".join(kept)
+    if text.endswith("\n") and not joined.endswith("\n"):
+        joined += "\n"
+    return joined
 
 
 # ── main runner ───────────────────────────────────────────────────────────────
