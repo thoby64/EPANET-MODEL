@@ -11,6 +11,12 @@ services:
     envVars:
       - key: API_KEYS
         sync: false
+      # Key offered to the standalone simulator UI (used when the simulator is
+      # run on its own, outside a MajiScope session). Set it to the same value
+      # as API_KEYS so operators type the same key everywhere.
+      # Leave it unset to keep the key server-side only.
+      - key: STANDALONE_API_KEY
+        sync: false
       - key: GPKG_DIR
         value: /data/gpkg
       - key: INP_DIR

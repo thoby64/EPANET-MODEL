@@ -687,6 +687,21 @@ async function loadFiles(preferredFile=null){
 }
 
 initIntegratedLaunch();
+loadStandaloneConfig();
+
+async function loadStandaloneConfig(){
+  // Standalone sessions (no MajiScope launch) get the shared API key and the
+  // service URL from the running service, so the operator types the same
+  // value that is configured in the service .env.
+  if(S.integrated) return;
+  try{
+    const r=await fetch("/standalone/config");
+    if(!r.ok) return;
+    const cfg=await r.json();
+    if(cfg.api_base) $("api-base").value=cfg.api_base;
+    if(cfg.api_key){ S.key=cfg.api_key; $("api-key").value=cfg.api_key; }
+  }catch(e){}
+}
 
 function checkFileStructure(f){
   const w=$("dma-layer-warn");

@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     # auth — stored as a comma-separated string, exposed as a list
     api_keys: str = "change-me-key-1"
 
+    # Key handed to the standalone simulator UI so an operator can type the same
+    # value that the service accepts. Empty means the UI keeps asking for it.
+    standalone_api_key: str = ""
+
     @field_validator("api_keys", mode="before")
     @classmethod
     def parse_api_keys(cls, v):
@@ -42,6 +46,11 @@ class Settings(BaseSettings):
     @property
     def api_key_list(self) -> List[str]:
         return [k.strip() for k in self.api_keys.split(",") if k.strip()]
+
+    @property
+    def effective_standalone_api_key(self) -> str:
+        """The key the standalone simulator UI offers to the operator."""
+        return (self.standalone_api_key or "").strip()
 
     # paths
     gpkg_dir:     str = "./data/gpkg"

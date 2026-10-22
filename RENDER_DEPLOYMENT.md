@@ -19,6 +19,11 @@ Set these in Render for the hydraulic model service:
 
 ```env
 API_KEYS=<same value as Backend HYDRAULIC_MODEL_API_KEY>
+# Key handed to the standalone simulator UI (used when the simulator is run on
+# its own, outside a MajiScope session). Set it to the same value as API_KEYS
+# so the operator types the same key everywhere.
+# Leave it unset to keep the key server-side only.
+STANDALONE_API_KEY=<same value as API_KEYS>
 GPKG_DIR=/data/gpkg
 DATABASE_URL=sqlite+aiosqlite:////data/db/epanet_service.db
 MAJISCOPE_BACKEND_URL=https://latest-majiscope-backend.onrender.com

@@ -14,6 +14,7 @@ os.environ.setdefault("GPKG_DIR",     "/data/gpkg")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:////tmp/test_api.db")
 
 from app.main import app  # noqa: E402
+from app.core.config import get_settings  # noqa: E402
 
 AUTH = {"X-API-Key": "test-key-123"}
 
@@ -30,6 +31,31 @@ async def test_health_no_auth(client):
     r = await client.get("/health")
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
+
+
+async def test_root_serves_live_status_page(client):
+    r = await client.get("/")
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+    assert "Live" in r.text
+    assert get_settings().service_name in r.text
+    assert "/app" in r.text
+
+
+async def test_standalone_config_exposes_shared_api_key(client):
+    r = await client.get("/standalone/config")
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["service_name"] == get_settings().service_name
+    assert payload["api_base"]
+    assert payload["api_key"] == get_settings().effective_standalone_api_key
+
+
+async def test_standalone_config_hides_key_when_not_configured(client, monkeypatch):
+    monkeypatch.setattr(get_settings(), "standalone_api_key", "")
+    r = await client.get("/standalone/config")
+    assert r.status_code == 200
+    assert r.json()["api_key"] == ""
 
 
 # ── auth ──────────────────────────────────────────────────────────────────────
